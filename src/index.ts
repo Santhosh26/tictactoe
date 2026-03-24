@@ -1,6 +1,5 @@
 export interface Env {
   GAME_ROOM: DurableObjectNamespace;
-  GAME_PASSWORD: string;
 }
 
 // ==========================================
@@ -12,20 +11,13 @@ export default {
 
     // Serve the frontend for all non-API paths
     if (url.pathname === '/') {
-      // Inject the server-side password so it never lives in source code.
-      const html = HTML_TEMPLATE.replace('__GAME_PASSWORD__', env.GAME_PASSWORD);
-      return new Response(html, {
+      return new Response(HTML_TEMPLATE, {
         headers: { 'Content-Type': 'text/html;charset=UTF-8' },
       });
     }
 
-    // WebSocket upgrade — expects ?room=CODE&clientId=UUID
+    // WebSocket upgrade — expects ?room=CODE&clientId=UUID&name=NAME
     if (url.pathname === '/ws') {
-      const password = url.searchParams.get('password');
-      if (password !== env.GAME_PASSWORD) {
-        return new Response('Unauthorized', { status: 401 });
-      }
-
       const room = url.searchParams.get('room');
       if (!room || !/^[A-Z0-9]{6}$/.test(room)) {
         return new Response('Bad Request: invalid room code', { status: 400 });
@@ -49,14 +41,18 @@ interface GameState {
   board: (string | null)[];
   turn: string;
   winner: string | null;
+  winLine: number[] | null;
   // Persist player slot assignments so reconnecting clients reclaim their symbol.
   playerX: string | null;
   playerO: string | null;
+  nameX: string | null;
+  nameO: string | null;
 }
 
 interface SocketAttachment {
   symbol: string;
   clientId: string;
+  name: string;
 }
 
 // Winning line indices typed as a fixed-length tuple to satisfy noUncheckedIndexedAccess.
@@ -73,16 +69,22 @@ export class TicTacToe {
   board: (string | null)[];
   turn: string;
   winner: string | null;
+  winLine: number[] | null;
   playerX: string | null;
   playerO: string | null;
+  nameX: string | null;
+  nameO: string | null;
 
   constructor(state: DurableObjectState, _env: Env) {
     this.state = state;
     this.board = Array(9).fill(null) as null[];
     this.turn = 'X';
     this.winner = null;
+    this.winLine = null;
     this.playerX = null;
     this.playerO = null;
+    this.nameX = null;
+    this.nameO = null;
   }
 
   // Load persisted game state from storage; falls back to in-memory defaults.
@@ -92,8 +94,11 @@ export class TicTacToe {
       this.board = stored.board;
       this.turn = stored.turn;
       this.winner = stored.winner;
+      this.winLine = stored.winLine ?? null;
       this.playerX = stored.playerX;
       this.playerO = stored.playerO;
+      this.nameX = stored.nameX ?? null;
+      this.nameO = stored.nameO ?? null;
     }
   }
 
@@ -103,13 +108,16 @@ export class TicTacToe {
       board: this.board,
       turn: this.turn,
       winner: this.winner,
+      winLine: this.winLine,
       playerX: this.playerX,
       playerO: this.playerO,
+      nameX: this.nameX,
+      nameO: this.nameO,
     });
   }
 
   // Assign a symbol to a clientId, restoring it if the client reconnects.
-  async assignSymbol(clientId: string): Promise<string> {
+  async assignSymbol(clientId: string, name: string): Promise<string> {
     await this.loadState();
 
     // Reconnecting player — restore their original symbol.
@@ -119,11 +127,13 @@ export class TicTacToe {
     // New player — claim the first available slot.
     if (this.playerX === null) {
       this.playerX = clientId;
+      this.nameX = name;
       await this.saveState();
       return 'X';
     }
     if (this.playerO === null) {
       this.playerO = clientId;
+      this.nameO = name;
       await this.saveState();
       return 'O';
     }
@@ -138,16 +148,17 @@ export class TicTacToe {
 
     const url = new URL(request.url);
     const clientId = url.searchParams.get('clientId') ?? crypto.randomUUID();
+    const name = (url.searchParams.get('name') ?? '').trim().slice(0, 20) || 'Player';
 
     const { 0: client, 1: server } = new WebSocketPair();
 
     // assignSymbol loads state internally — call before acceptWebSocket.
-    const symbol = await this.assignSymbol(clientId);
+    const symbol = await this.assignSymbol(clientId, name);
 
     // Accept into the hibernation model, then attach identity to the socket so
     // it survives any future hibernation wake-up.
     this.state.acceptWebSocket(server);
-    server.serializeAttachment({ symbol, clientId } as SocketAttachment);
+    server.serializeAttachment({ symbol, clientId, name } as SocketAttachment);
 
     // Reload so broadcastState has current board (assignSymbol may have mutated it).
     await this.loadState();
@@ -182,6 +193,7 @@ export class TicTacToe {
     } else if (data.type === 'reset') {
       this.board = Array(9).fill(null) as null[];
       this.winner = null;
+      this.winLine = null;
       this.turn = 'X';
       await this.saveState();
       this.broadcastState();
@@ -202,9 +214,12 @@ export class TicTacToe {
       // Last player left — reset everything for the next session.
       this.board = Array(9).fill(null) as null[];
       this.winner = null;
+      this.winLine = null;
       this.turn = 'X';
       this.playerX = null;
       this.playerO = null;
+      this.nameX = null;
+      this.nameO = null;
       await this.saveState();
     } else {
       await this.loadState();
@@ -219,9 +234,12 @@ export class TicTacToe {
     if (remaining.length === 0) {
       this.board = Array(9).fill(null) as null[];
       this.winner = null;
+      this.winLine = null;
       this.turn = 'X';
       this.playerX = null;
       this.playerO = null;
+      this.nameX = null;
+      this.nameO = null;
       await this.saveState();
     } else {
       await this.loadState();
@@ -234,11 +252,13 @@ export class TicTacToe {
       const cellA = this.board[a];
       if (cellA && cellA === this.board[b] && cellA === this.board[c]) {
         this.winner = cellA;
+        this.winLine = [a, b, c];
         return;
       }
     }
     if (!this.board.includes(null)) {
       this.winner = 'Draw';
+      this.winLine = null;
     }
   }
 
@@ -250,7 +270,10 @@ export class TicTacToe {
       board: this.board,
       turn: this.turn,
       winner: this.winner,
+      winLine: this.winLine,
       playersCount: activeSockets.length,
+      nameX: this.nameX,
+      nameO: this.nameO,
     });
     for (const ws of activeSockets) {
       ws.send(stateMessage);
@@ -262,8 +285,6 @@ export class TicTacToe {
 // 3. FRONTEND UI (HTML/CSS/JS)
 // ==========================================
 
-// __GAME_PASSWORD__ is replaced at serve-time by the Worker router so the
-// actual secret never appears in source code.
 const HTML_TEMPLATE = `
 <!DOCTYPE html>
 <html lang="en">
@@ -283,7 +304,7 @@ const HTML_TEMPLATE = `
       min-height: 100vh;
       background: #0f0f0f;
       color: #f0f0f0;
-      gap: 24px;
+      gap: 20px;
       padding: 24px;
     }
 
@@ -294,66 +315,164 @@ const HTML_TEMPLATE = `
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 20px;
+      gap: 14px;
       width: 100%;
       max-width: 320px;
+    }
+    .lobby-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #666;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      align-self: flex-start;
     }
     #lobby .divider {
       display: flex;
       align-items: center;
       gap: 10px;
       width: 100%;
-      color: #666;
-      font-size: 0.85rem;
+      color: #444;
+      font-size: 0.8rem;
     }
     #lobby .divider::before,
     #lobby .divider::after {
       content: '';
       flex: 1;
       height: 1px;
-      background: #333;
+      background: #222;
     }
     #join-row { display: flex; gap: 8px; width: 100%; }
     #join-row input {
       flex: 1;
       min-width: 0;
       text-transform: uppercase;
-      letter-spacing: 0.1em;
+      letter-spacing: 0.15em;
     }
 
     /* ---- Game ---- */
-    #game { display: none; flex-direction: column; align-items: center; gap: 16px; }
+    #game { display: none; flex-direction: column; align-items: center; gap: 14px; }
 
     #room-banner {
       display: flex;
       align-items: center;
       gap: 10px;
-      background: #1a1a1a;
-      border: 1px solid #333;
+      background: #161616;
+      border: 1px solid #222;
       border-radius: 8px;
-      padding: 8px 16px;
-      font-size: 0.9rem;
-      color: #aaa;
+      padding: 7px 14px;
+      font-size: 0.82rem;
+      color: #555;
     }
-    #room-code { font-weight: 700; color: #fff; letter-spacing: 0.15em; font-size: 1rem; }
+    #room-code { font-weight: 700; color: #ddd; letter-spacing: 0.18em; font-size: 0.9rem; }
     #copy-btn {
       background: none;
-      border: 1px solid #444;
-      color: #aaa;
+      border: 1px solid #2a2a2a;
+      color: #777;
       padding: 3px 10px;
-      font-size: 0.8rem;
+      font-size: 0.75rem;
       cursor: pointer;
       border-radius: 5px;
+      width: auto;
     }
-    #copy-btn:hover { background: #222; color: #fff; }
+    #copy-btn:hover { background: #1e1e1e; color: #ccc; }
 
-    #status {
-      font-size: 1.05rem;
+    /* ---- Player cards ---- */
+    #players-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      max-width: 360px;
+    }
+
+    .player-card {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 14px 8px 10px;
+      border-radius: 12px;
+      border: 2px solid #1e1e1e;
+      background: #111;
+      transition: border-color 0.3s, box-shadow 0.3s, opacity 0.3s;
+      opacity: 0.4;
+      min-width: 0;
+    }
+    .player-card.active   { opacity: 1; }
+    .player-card.x.active { border-color: #4f9cf9; box-shadow: 0 0 18px rgba(79,156,249,0.2); }
+    .player-card.o.active { border-color: #f97b4f; box-shadow: 0 0 18px rgba(249,123,79,0.2); }
+    .player-card.winner   { opacity: 1; border-color: #6ee86e; box-shadow: 0 0 22px rgba(110,232,110,0.3); }
+    .player-card.loser    { opacity: 0.18; }
+
+    .card-symbol {
+      font-size: 1.8rem;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .player-card.x .card-symbol { color: #4f9cf9; }
+    .player-card.o .card-symbol { color: #f97b4f; }
+
+    .card-name {
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: #ddd;
+      max-width: 110px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
       text-align: center;
-      min-height: 2.4em;
-      line-height: 1.5;
     }
 
+    .card-you {
+      font-size: 0.6rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      height: 0.85rem;
+      color: transparent;
+    }
+    .player-card.x .card-you { color: #2e68b0; }
+    .player-card.o .card-you { color: #a05030; }
+
+    /* Pulsing turn dot */
+    .card-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      margin-top: 2px;
+      opacity: 0;
+    }
+    .player-card.x .card-dot { background: #4f9cf9; }
+    .player-card.o .card-dot { background: #f97b4f; }
+    .player-card.active:not(.winner):not(.loser) .card-dot {
+      opacity: 1;
+      animation: blink 1.1s ease-in-out infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.15; }
+    }
+
+    .vs-label {
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: #333;
+      letter-spacing: 0.08em;
+      flex-shrink: 0;
+    }
+
+    /* ---- Status ---- */
+    #status {
+      font-size: 1rem;
+      text-align: center;
+      min-height: 1.4em;
+      line-height: 1.4;
+    }
+
+    /* ---- Board ---- */
     #board {
       display: grid;
       grid-template-columns: repeat(3, 100px);
@@ -362,21 +481,33 @@ const HTML_TEMPLATE = `
     .cell {
       width: 100px;
       height: 100px;
-      background: #1e1e1e;
-      border: 1px solid #2e2e2e;
+      background: #161616;
+      border: 1px solid #232323;
       display: flex;
       align-items: center;
       justify-content: center;
       font-size: 2.8rem;
-      font-weight: 700;
-      cursor: pointer;
-      border-radius: 8px;
-      transition: background 0.1s;
+      font-weight: 800;
+      cursor: default;
+      border-radius: 10px;
+      transition: background 0.1s, border-color 0.25s, box-shadow 0.25s;
       user-select: none;
     }
-    .cell:hover { background: #2a2a2a; }
     .cell.x { color: #4f9cf9; }
     .cell.o { color: #f97b4f; }
+
+    /* Only show hover on empty cells when it is the player's turn */
+    .cell.clickable { cursor: pointer; }
+    .cell.clickable:hover { background: #202020; }
+
+    /* Winning line highlight */
+    .cell.winning {
+      background: #172217;
+      border-color: #4db84d;
+      box-shadow: inset 0 0 14px rgba(110,232,110,0.12);
+    }
+    .cell.winning.x { color: #74c8ff; }
+    .cell.winning.o { color: #ffaa7a; }
 
     /* ---- Shared controls ---- */
     button {
@@ -389,30 +520,31 @@ const HTML_TEMPLATE = `
       transition: background 0.15s;
       width: 100%;
     }
-    .btn-primary { background: #4f9cf9; color: #000; }
+    .btn-primary       { background: #4f9cf9; color: #000; }
     .btn-primary:hover { background: #3a87f0; }
-    .btn-secondary { background: #2a2a2a; color: #ddd; border: 1px solid #444; }
-    .btn-secondary:hover { background: #333; }
+    .btn-secondary       { background: #181818; color: #ccc; border: 1px solid #2a2a2a; }
+    .btn-secondary:hover { background: #202020; }
 
     input {
       padding: 11px 14px;
       font-size: 1rem;
       border-radius: 7px;
-      border: 1px solid #333;
-      background: #1a1a1a;
+      border: 1px solid #222;
+      background: #111;
       color: #f0f0f0;
       outline: none;
       width: 100%;
     }
     input:focus { border-color: #4f9cf9; }
 
-    #reset-btn { display: none; max-width: 200px; margin-top: 4px; }
-    #back-btn  { display: none; max-width: 200px; }
+    #reset-btn { display: none; max-width: 200px; }
+    #back-btn  { max-width: 200px; }
 
-    .waiting { color: #888; font-style: italic; }
+    .waiting   { color: #555; font-style: italic; }
     .your-turn { color: #4f9cf9; font-weight: 700; }
-    .win  { color: #6ee86e; font-weight: 700; }
-    .draw { color: #f9d44f; font-weight: 700; }
+    .win       { color: #6ee86e; font-weight: 700; }
+    .lose      { color: #666; }
+    .draw      { color: #f9d44f; font-weight: 700; }
   </style>
 </head>
 <body>
@@ -420,10 +552,12 @@ const HTML_TEMPLATE = `
 
   <!-- Lobby -->
   <div id="lobby">
+    <span class="lobby-label">Your name</span>
+    <input id="name-input" maxlength="20" placeholder="Enter your name" autocomplete="off" />
     <button class="btn-primary" onclick="createGame()">Create Game</button>
     <div class="divider">or join with a code</div>
     <div id="join-row">
-      <input id="join-input" maxlength="6" placeholder="ROOM CODE" />
+      <input id="join-input" maxlength="6" placeholder="ROOM CODE" autocomplete="off" />
       <button class="btn-secondary" style="width:auto;padding:11px 18px;" onclick="joinGame()">Join</button>
     </div>
   </div>
@@ -431,9 +565,27 @@ const HTML_TEMPLATE = `
   <!-- Game room -->
   <div id="game">
     <div id="room-banner">
-      Room: <span id="room-code"></span>
+      Room:&nbsp;<span id="room-code"></span>
       <button id="copy-btn" onclick="copyLink()">Copy link</button>
     </div>
+
+    <!-- Player cards -->
+    <div id="players-row">
+      <div id="player-x" class="player-card x">
+        <div class="card-symbol">X</div>
+        <div id="name-x" class="card-name">—</div>
+        <div id="badge-x" class="card-you"></div>
+        <div class="card-dot"></div>
+      </div>
+      <div class="vs-label">VS</div>
+      <div id="player-o" class="player-card o">
+        <div class="card-symbol">O</div>
+        <div id="name-o" class="card-name">—</div>
+        <div id="badge-o" class="card-you"></div>
+        <div class="card-dot"></div>
+      </div>
+    </div>
+
     <div id="status"></div>
     <div id="board"></div>
     <button id="reset-btn" class="btn-secondary" onclick="resetGame()">Play Again</button>
@@ -441,15 +593,28 @@ const HTML_TEMPLATE = `
   </div>
 
   <script>
-    const GAME_PASSWORD = '__GAME_PASSWORD__';
-
-    let ws = null;
-    let mySymbol = '';
+    let ws          = null;
+    let mySymbol    = '';
     let currentRoom = '';
+
+    // ---- Name persistence ----
+
+    function loadSavedName() {
+      const saved = localStorage.getItem('ttt_name');
+      if (saved) document.getElementById('name-input').value = saved;
+    }
+
+    function getMyName() {
+      const val = document.getElementById('name-input').value.trim();
+      const name = val || localStorage.getItem('ttt_name') || 'Player';
+      if (val) localStorage.setItem('ttt_name', val);
+      return name;
+    }
 
     // ---- Routing ----
 
     function init() {
+      loadSavedName();
       const params = new URLSearchParams(window.location.search);
       const room = params.get('room');
       if (room && /^[A-Z0-9]{6}$/i.test(room)) {
@@ -496,13 +661,13 @@ const HTML_TEMPLATE = `
     function showLobby() {
       document.getElementById('lobby').style.display = 'flex';
       document.getElementById('game').style.display  = 'none';
-      document.getElementById('back-btn').style.display = 'none';
     }
 
     function showGame() {
       document.getElementById('lobby').style.display = 'none';
       document.getElementById('game').style.display  = 'flex';
-      document.getElementById('back-btn').style.display = 'block';
+      document.getElementById('reset-btn').style.display = 'none';
+      resetPlayerCards();
       setStatus('<span class="waiting">Connecting...</span>');
     }
 
@@ -519,11 +684,12 @@ const HTML_TEMPLATE = `
 
     function connectWS(room) {
       const clientId = getClientId();
-      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = proto + '//' + location.host
-        + '/ws?room=' + encodeURIComponent(room)
-        + '&password=' + encodeURIComponent(GAME_PASSWORD)
-        + '&clientId=' + encodeURIComponent(clientId);
+      const name     = getMyName();
+      const proto    = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url      = proto + '//' + location.host
+        + '/ws?room='   + encodeURIComponent(room)
+        + '&clientId='  + encodeURIComponent(clientId)
+        + '&name='      + encodeURIComponent(name);
 
       ws = new WebSocket(url);
 
@@ -539,7 +705,9 @@ const HTML_TEMPLATE = `
         }
 
         if (data.type === 'state') {
-          renderBoard(data.board);
+          const isMyTurn = data.turn === mySymbol && !data.winner;
+          renderBoard(data.board, data.winLine, isMyTurn);
+          updatePlayerCards(data);
           updateStatus(data);
         }
       };
@@ -555,16 +723,67 @@ const HTML_TEMPLATE = `
       };
     }
 
-    // ---- Game UI ----
+    // ---- Player cards ----
 
-    function renderBoard(board) {
+    function resetPlayerCards() {
+      document.getElementById('name-x').textContent  = '—';
+      document.getElementById('name-o').textContent  = '—';
+      document.getElementById('badge-x').textContent = '';
+      document.getElementById('badge-o').textContent = '';
+      document.getElementById('player-x').className  = 'player-card x';
+      document.getElementById('player-o').className  = 'player-card o';
+    }
+
+    function updatePlayerCards(state) {
+      const cardX = document.getElementById('player-x');
+      const cardO = document.getElementById('player-o');
+
+      document.getElementById('name-x').textContent  = state.nameX || '—';
+      document.getElementById('name-o').textContent  = state.nameO || '—';
+      document.getElementById('badge-x').textContent = mySymbol === 'X' ? 'YOU' : '';
+      document.getElementById('badge-o').textContent = mySymbol === 'O' ? 'YOU' : '';
+
+      cardX.className = 'player-card x';
+      cardO.className = 'player-card o';
+
+      if (state.playersCount < 2) {
+        // Only one player connected — highlight their slot.
+        if (mySymbol === 'X') cardX.className += ' active';
+        else if (mySymbol === 'O') cardO.className += ' active';
+        return;
+      }
+
+      if (state.winner === 'Draw') {
+        cardX.className += ' active';
+        cardO.className += ' active';
+      } else if (state.winner === 'X') {
+        cardX.className += ' winner';
+        cardO.className += ' loser';
+      } else if (state.winner === 'O') {
+        cardO.className += ' winner';
+        cardX.className += ' loser';
+      } else {
+        // Game in progress — highlight whose turn it is.
+        if (state.turn === 'X') cardX.className += ' active';
+        else                    cardO.className += ' active';
+      }
+    }
+
+    // ---- Board ----
+
+    function renderBoard(board, winLine, isMyTurn) {
       const boardDiv = document.getElementById('board');
       boardDiv.innerHTML = '';
       board.forEach((cell, index) => {
-        const div = document.createElement('div');
-        div.className = 'cell' + (cell ? ' ' + cell.toLowerCase() : '');
+        const div   = document.createElement('div');
+        const isWin = winLine && winLine.includes(index);
+        let cls = 'cell';
+        if (cell)              cls += ' ' + cell.toLowerCase();
+        if (isWin)             cls += ' winning';
+        if (!cell && isMyTurn) cls += ' clickable';
+        div.className   = cls;
         div.textContent = cell || '';
-        div.onclick = () => makeMove(index);
+        if (!cell) div.onclick = () => makeMove(index);
         boardDiv.appendChild(div);
       });
     }
@@ -581,8 +800,14 @@ const HTML_TEMPLATE = `
       }
     }
 
+    // ---- Status ----
+
     function updateStatus(state) {
-      const resetBtn = document.getElementById('reset-btn');
+      const resetBtn    = document.getElementById('reset-btn');
+      const nameX       = state.nameX || 'X';
+      const nameO       = state.nameO || 'O';
+      const myName      = mySymbol === 'X' ? nameX : mySymbol === 'O' ? nameO : 'You';
+      const opponentName = mySymbol === 'X' ? nameO : nameX;
 
       if (state.playersCount < 2) {
         setStatus('<span class="waiting">Waiting for opponent...</span>');
@@ -590,23 +815,26 @@ const HTML_TEMPLATE = `
         return;
       }
 
-      let text = 'You are: <strong>' + mySymbol + '</strong> &nbsp;|&nbsp; ';
+      let text = '';
 
       if (state.winner) {
-        if (state.winner === 'Draw') {
-          text += '<span class="draw">It\'s a draw!</span>';
-        } else if (state.winner === mySymbol) {
-          text += '<span class="win">You win!</span>';
-        } else {
-          text += '<span class="draw">You lose.</span>';
-        }
         resetBtn.style.display = 'block';
+        if (state.winner === 'Draw') {
+          text = '<span class="draw">It\\'s a draw!</span>';
+        } else if (state.winner === mySymbol) {
+          text = '<span class="win">You win, ' + myName + '!</span>';
+        } else {
+          text = '<span class="lose">' + opponentName + ' wins!</span>';
+        }
       } else {
         resetBtn.style.display = 'none';
-        if (state.turn === mySymbol) {
-          text += '<span class="your-turn">Your turn</span>';
+        if (mySymbol === 'Spectator') {
+          const turnName = state.turn === 'X' ? nameX : nameO;
+          text = '<span class="waiting">' + turnName + '\\'s turn...</span>';
+        } else if (state.turn === mySymbol) {
+          text = '<span class="your-turn">Your turn!</span>';
         } else {
-          text += '<span class="waiting">Opponent\'s turn...</span>';
+          text = '<span class="waiting">' + opponentName + '\\'s turn...</span>';
         }
       }
 
@@ -626,12 +854,17 @@ const HTML_TEMPLATE = `
       });
     }
 
-    // Allow pressing Enter in the join input
+    // Allow Enter in the join input to submit.
     document.getElementById('join-input').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') joinGame();
     });
 
-    // Handle browser back/forward navigation
+    // Allow Enter in the name input to move focus to room code field.
+    document.getElementById('name-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('join-input').focus();
+    });
+
+    // Handle browser back/forward navigation.
     window.addEventListener('popstate', init);
 
     init();

@@ -15,7 +15,7 @@ The entire application lives in a single TypeScript file (`src/index.ts`).
 | Language         | TypeScript 6                                  |
 | Runtime          | Cloudflare Workers (edge, not Node.js)        |
 | Key primitive    | Durable Objects + WebSockets                  |
-| Entry point      | `src/index.ts`                                |
+| Entry point      | `src/index.ts` (router); `src/game.ts` (DO)   |
 | Build tool       | Wrangler 4 (uses esbuild internally)          |
 | Module format    | `"type": "commonjs"` in package.json          |
 | Type definitions | `@cloudflare/workers-types`                   |
@@ -86,14 +86,18 @@ Place test files in `src/__tests__/` following the pattern `*.test.ts`.
 ```
 tictactoe/
 ├── src/
-│   └── index.ts          # Entire application (Worker router + Durable Object + frontend HTML)
+│   ├── index.ts          # Worker router (~50 lines): CSP headers, Origin check, re-exports
+│   ├── game.ts           # TicTacToe Durable Object: state machine, WS, rate limiting, sandbox
+│   ├── sandbox.ts        # Game rules module (local + Dynamic Worker isolate string)
+│   ├── types.ts          # Shared interfaces, types, and constants
+│   └── frontend.ts       # HTML_TEMPLATE export with XSS-safe DOM methods and reconnection
 ├── wrangler.toml         # Cloudflare Workers deployment config
 ├── package.json
 └── package-lock.json
 ```
 
-The project is intentionally minimal — a single source file. Avoid splitting it
-into multiple files unless the application grows significantly.
+The application was split into multiple files to accommodate sandboxing, rate
+limiting, alarms, a state machine, and a mutual reset protocol.
 
 ---
 
@@ -111,13 +115,12 @@ into multiple files unless the application grows significantly.
 
 ### Imports
 
-There are **no `import` statements** in this project. All APIs (`Request`,
-`Response`, `WebSocket`, `WebSocketPair`, `DurableObjectState`,
-`DurableObjectNamespace`) are Cloudflare Workers ambient globals provided by
-`@cloudflare/workers-types`.
+Use standard ES `import` syntax for cross-file imports. Cloudflare Workers
+ambient globals (`Request`, `Response`, `WebSocket`, `WebSocketPair`,
+`DurableObjectState`, `DurableObjectNamespace`) are provided by
+`@cloudflare/workers-types` — no imports needed for those.
 
-If new dependencies are ever needed, use standard ES `import` syntax at the
-top of the file. Do not use `require()`.
+Do not use `require()`.
 
 ### Naming Conventions
 
@@ -143,23 +146,20 @@ top of the file. Do not use `require()`.
 
 ### File & Code Organization
 
-The source file is divided into three major sections using banner comments:
+Each source file has a banner comment at the top using `// ===` style:
 
 ```typescript
 // ==========================================
-// 1. WORKER ROUTER
-// ==========================================
-
-// ==========================================
-// 2. DURABLE OBJECT (Game State & Logic)
-// ==========================================
-
-// ==========================================
-// 3. FRONTEND UI (HTML/CSS/JS)
+// WORKER ROUTER
 // ==========================================
 ```
 
-Maintain this structure. Add new sections with the same `// ===` banner style.
+- `src/index.ts` — Worker router + security headers + re-exports
+- `src/game.ts` — Durable Object (state machine, WebSocket handlers, alarms, sandbox)
+- `src/sandbox.ts` — Game rules (local function + string module for Dynamic Workers)
+- `src/types.ts` — Shared interfaces, types, and constants
+- `src/frontend.ts` — HTML template (XSS-safe, auto-reconnect, mutual reset)
+
 Use inline `// Comment` style for short explanatory notes; avoid block comments
 (`/* */`) unless documenting a public API.
 
@@ -219,7 +219,7 @@ The frontend is a template literal constant `HTML_CONTENT` in `src/index.ts`.
 
 - Do not add a `tsconfig.json` unless Wrangler's implicit config is insufficient.
 - Do not add ESLint/Prettier unless explicitly requested.
-- Do not split `src/index.ts` into multiple files for minor features.
+- Do not add new source files without clear justification (e.g., new game mode).
 - Do not commit `.wrangler/` — it contains local dev state.
 - Do not hardcode secrets in source. The password (`secret1!`) is a demo
   placeholder; production secrets should use Wrangler secrets

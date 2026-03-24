@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Wrangler local dev state
+.wrangler/
+
+# Build output
+dist/
+
+# Local secrets — use `wrangler secret put` for production
+.dev.vars
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# OS artefacts
+.DS_Store
+Thumbs.db
+
+# Editor directories
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+package-lock.json

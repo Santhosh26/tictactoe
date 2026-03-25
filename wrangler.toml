@@ -2,6 +2,10 @@ name = "tic-tac-toe-do"
 main = "src/index.ts"
 compatibility_date = "2026-03-20"
 
+routes = [
+  { pattern = "tictactoe.ksanthoshkumar.com/*", zone_name = "ksanthoshkumar.com" }
+]
+
 [[durable_objects.bindings]]
 name = "GAME_ROOM"
 class_name = "TicTacToe"
@@ -10,6 +14,7 @@ class_name = "TicTacToe"
 tag = "v1"
 new_sqlite_classes = ["TicTacToe"]
 
-routes = [
-  { pattern = "tictactoe.ksanthoshkumar.com/*", zone_name = "ksanthoshkumar.com" }
-]
+# To enable Dynamic Workers sandbox for move validation (optional, requires paid plan):
+# [[unsafe.bindings]]
+# name = "LOADER"
+# type = "dynamic_worker"

@@ -43,6 +43,16 @@ export default {
         return new Response('Bad Request: invalid room code', { status: 400 });
       }
 
+      const mode = url.searchParams.get('mode') ?? 'multiplayer';
+      if (mode !== 'multiplayer' && mode !== 'singleplayer') {
+        return new Response('Bad Request: invalid mode', { status: 400 });
+      }
+
+      const difficulty = url.searchParams.get('difficulty') ?? 'hard';
+      if (!['easy', 'medium', 'hard'].includes(difficulty)) {
+        return new Response('Bad Request: invalid difficulty', { status: 400 });
+      }
+
       const roomId = env.GAME_ROOM.idFromName(room);
       const roomObject = env.GAME_ROOM.get(roomId);
       return roomObject.fetch(request);

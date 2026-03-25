@@ -5,9 +5,29 @@
 export type PlayerSymbol = 'X' | 'O';
 export type CellValue = PlayerSymbol | null;
 export type GamePhase = 'waiting' | 'playing' | 'finished';
+export type GameMode = 'multiplayer' | 'singleplayer';
+export type AiDifficulty = 'easy' | 'medium' | 'hard';
+
+export interface DynamicWorkerLoader {
+  load(config: {
+    mainModule: string;
+    modules: Record<string, string>;
+    globalOutbound: null;
+  }): Promise<{
+    getEntrypoint(): {
+      validateAndApply(
+        board: CellValue[],
+        playerSymbol: string,
+        moveIndex: number,
+        turn: string,
+      ): MoveResult;
+    };
+  }>;
+}
 
 export interface Env {
   GAME_ROOM: DurableObjectNamespace;
+  LOADER?: DynamicWorkerLoader;
 }
 
 export interface Scoreboard {
@@ -29,6 +49,8 @@ export interface GameState {
   resetRequestedBy: string | null;
   lastStarter: PlayerSymbol;
   lastRoomActivity: number;
+  gameMode: GameMode;
+  aiDifficulty: AiDifficulty | null;
 }
 
 export interface SocketAttachment {
@@ -58,6 +80,7 @@ export const WINNING_LINES: WinLine[] = [
   [0, 4, 8], [2, 4, 6],             // Diagonals
 ];
 
+export const AI_MOVE_DELAY_MS = 250; // Delay before AI places move for natural feel
 export const MAX_CONNECTIONS = 52; // 2 players + 50 spectators
 export const RATE_LIMIT_MAX_TOKENS = 10;
 export const RATE_LIMIT_REFILL_RATE = 2; // tokens per second

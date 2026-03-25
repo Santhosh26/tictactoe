@@ -6,6 +6,8 @@ import {
   Env,
   GameState,
   GamePhase,
+  GameMode,
+  AiDifficulty,
   CellValue,
   PlayerSymbol,
   Scoreboard,
@@ -18,8 +20,9 @@ import {
   IDLE_SOCKET_TIMEOUT_MS,
   ROOM_TTL_MS,
   ALARM_INTERVAL_MS,
+  AI_MOVE_DELAY_MS,
 } from './types';
-import { validateAndApply, GAME_RULES_MODULE } from './sandbox';
+import { validateAndApply, computeAiMove, GAME_RULES_MODULE } from './sandbox';
 
 // ---- Rate limiter per socket ----
 
@@ -73,6 +76,8 @@ export class TicTacToe {
   winsO: number;
   draws: number;
   stateLoaded: boolean;
+  gameMode: GameMode;
+  aiDifficulty: AiDifficulty | null;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -93,6 +98,8 @@ export class TicTacToe {
     this.winsO = 0;
     this.draws = 0;
     this.stateLoaded = false;
+    this.gameMode = 'multiplayer';
+    this.aiDifficulty = null;
   }
 
   // Smart state caching — loads from storage only once per DO wake cycle.
@@ -112,6 +119,8 @@ export class TicTacToe {
       this.resetRequestedBy = stored.resetRequestedBy ?? null;
       this.lastStarter = stored.lastStarter ?? 'X';
       this.lastRoomActivity = stored.lastRoomActivity ?? Date.now();
+      this.gameMode = stored.gameMode ?? 'multiplayer';
+      this.aiDifficulty = stored.aiDifficulty ?? null;
     }
     const scoreboard = await this.state.storage.get<Scoreboard>('scoreboard');
     if (scoreboard) {
@@ -136,6 +145,8 @@ export class TicTacToe {
       resetRequestedBy: this.resetRequestedBy,
       lastStarter: this.lastStarter,
       lastRoomActivity: this.lastRoomActivity,
+      gameMode: this.gameMode,
+      aiDifficulty: this.aiDifficulty,
     });
   }
 
@@ -169,7 +180,7 @@ export class TicTacToe {
       await this.saveState();
       return 'X';
     }
-    if (this.playerO === null) {
+    if (this.playerO === null && this.playerO !== '__AI__') {
       this.playerO = clientId;
       this.nameO = name;
       // Transition to playing phase when both players are present.
@@ -197,10 +208,22 @@ export class TicTacToe {
     const url = new URL(request.url);
     const clientId = url.searchParams.get('clientId') ?? crypto.randomUUID();
     const name = (url.searchParams.get('name') ?? '').trim().slice(0, 20) || 'Player';
+    const mode = (url.searchParams.get('mode') ?? 'multiplayer') as GameMode;
+    const difficulty = (url.searchParams.get('difficulty') ?? 'hard') as AiDifficulty;
 
     const { 0: client, 1: server } = new WebSocketPair();
 
     const symbol = await this.assignSymbol(clientId, name);
+
+    // Set up single-player mode when the first player connects.
+    if (mode === 'singleplayer' && symbol === 'X' && this.gameMode !== 'singleplayer') {
+      this.gameMode = 'singleplayer';
+      this.aiDifficulty = difficulty;
+      this.playerO = '__AI__';
+      this.nameO = 'AI (' + difficulty.charAt(0).toUpperCase() + difficulty.slice(1) + ')';
+      this.phase = 'playing';
+      await this.saveState();
+    }
 
     this.state.acceptWebSocket(server);
     server.serializeAttachment({ symbol, clientId, name } as SocketAttachment);
@@ -244,6 +267,9 @@ export class TicTacToe {
       const index = data.index;
       if (index === undefined) return;
 
+      // In single-player mode, only the human (X) can send moves.
+      if (this.gameMode === 'singleplayer' && playerSymbol !== 'X') return;
+
       // Use sandbox for move validation if available, otherwise local fallback.
       let result: MoveResult;
       try {
@@ -271,11 +297,45 @@ export class TicTacToe {
 
         await this.saveState();
         this.broadcastState();
+
+        // AI's turn in single-player mode.
+        if (
+          this.gameMode === 'singleplayer' &&
+          this.turn === 'O' &&
+          !this.winner &&
+          this.phase === 'playing'
+        ) {
+          await this.executeAiMove();
+        }
       }
     } else if (data.type === 'reset' && this.phase === 'finished') {
       // Auth check: only actual players can reset.
       if (clientId !== this.playerX && clientId !== this.playerO) return;
 
+      // Single-player: immediate reset, no mutual protocol needed.
+      if (this.gameMode === 'singleplayer') {
+        if (this.winner === 'X' || this.winner === 'O') {
+          this.turn = this.winner as PlayerSymbol;
+        } else {
+          this.turn = this.lastStarter === 'X' ? 'O' : 'X';
+        }
+        this.lastStarter = this.turn;
+        this.board = Array(9).fill(null) as CellValue[];
+        this.winner = null;
+        this.winLine = null;
+        this.phase = 'playing';
+        this.resetRequestedBy = null;
+        await this.saveState();
+        this.broadcastState();
+
+        // If AI starts, make its move.
+        if (this.turn === 'O') {
+          await this.executeAiMove();
+        }
+        return;
+      }
+
+      // Multiplayer: mutual reset protocol.
       if (this.resetRequestedBy === null) {
         // First player requests reset.
         this.resetRequestedBy = clientId;
@@ -299,6 +359,33 @@ export class TicTacToe {
         this.broadcastState();
       }
       // If same player sends reset again, ignore.
+    }
+  }
+
+  // Execute AI move with a brief delay for natural feel.
+  private async executeAiMove(): Promise<void> {
+    await new Promise<void>(resolve => setTimeout(resolve, AI_MOVE_DELAY_MS));
+
+    const aiIndex = computeAiMove(this.board, 'O', this.aiDifficulty ?? 'hard');
+    const result = validateAndApply(this.board, 'O', aiIndex, this.turn);
+
+    if (result.valid) {
+      this.board = result.board;
+      this.winner = result.winner;
+      this.winLine = result.winLine;
+
+      if (this.winner) {
+        this.phase = 'finished';
+        if (this.winner === 'X') this.winsX++;
+        else if (this.winner === 'O') this.winsO++;
+        else if (this.winner === 'Draw') this.draws++;
+        await this.saveScoreboard();
+      } else {
+        this.turn = 'X';
+      }
+
+      await this.saveState();
+      this.broadcastState();
     }
   }
 
@@ -327,6 +414,8 @@ export class TicTacToe {
       this.winsX = 0;
       this.winsO = 0;
       this.draws = 0;
+      this.gameMode = 'multiplayer';
+      this.aiDifficulty = null;
       await this.saveState();
       await this.state.storage.delete('scoreboard');
     } else {
@@ -353,6 +442,8 @@ export class TicTacToe {
       this.winsX = 0;
       this.winsO = 0;
       this.draws = 0;
+      this.gameMode = 'multiplayer';
+      this.aiDifficulty = null;
       await this.saveState();
       await this.state.storage.delete('scoreboard');
     } else {
@@ -405,6 +496,8 @@ export class TicTacToe {
       winsX: this.winsX,
       winsO: this.winsO,
       draws: this.draws,
+      gameMode: this.gameMode,
+      aiDifficulty: this.aiDifficulty,
     });
     for (const ws of activeSockets) {
       try {
@@ -425,14 +518,11 @@ export class TicTacToe {
     turn: string,
   ): Promise<MoveResult> {
     // Check if LOADER binding exists (Dynamic Workers API).
-    const env = this.env as unknown as Record<string, unknown>;
-    if (!env['LOADER'] || typeof (env['LOADER'] as Record<string, unknown>)['load'] !== 'function') {
-      // LOADER not available — use local fallback.
+    if (!this.env.LOADER) {
       return validateAndApply(board, playerSymbol, moveIndex, turn);
     }
 
-    const loader = env['LOADER'] as { load: (config: unknown) => Promise<{ getEntrypoint: () => { validateAndApply: (b: CellValue[], s: string, i: number, t: string) => MoveResult } }> };
-    const worker = await loader.load({
+    const worker = await this.env.LOADER.load({
       mainModule: 'rules.js',
       modules: {
         'rules.js': GAME_RULES_MODULE,

@@ -3,6 +3,7 @@
 // ==========================================
 // All XSS vulnerabilities fixed: innerHTML replaced with textContent + DOM methods.
 // Auto-reconnection with exponential backoff. beforeunload handler. Mutual reset.
+// Single-player mode with AI difficulty selection.
 
 export const HTML_TEMPLATE = `
 <!DOCTYPE html>
@@ -10,7 +11,7 @@ export const HTML_TEMPLATE = `
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Multiplayer Tic-Tac-Toe</title>
+  <title>Tic-Tac-Toe</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -69,6 +70,52 @@ export const HTML_TEMPLATE = `
       letter-spacing: 0.15em;
     }
 
+    /* ---- Mode selection ---- */
+    #mode-select {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: 100%;
+    }
+    #mp-options, #ai-options {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+    }
+    .btn-ai       { background: #f97b4f; color: #000; }
+    .btn-ai:hover { background: #e06a3f; }
+    #difficulty-row {
+      display: flex;
+      gap: 6px;
+      width: 100%;
+    }
+    .btn-diff {
+      flex: 1;
+      padding: 10px 8px;
+      font-size: 0.85rem;
+      background: #181818;
+      color: #888;
+      border: 1px solid #2a2a2a;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-weight: 600;
+    }
+    .btn-diff:hover { background: #222; color: #ccc; }
+    .btn-diff.selected { background: #f97b4f; color: #000; border-color: #f97b4f; }
+    .btn-back {
+      background: none;
+      border: none;
+      color: #555;
+      font-size: 0.82rem;
+      cursor: pointer;
+      padding: 4px 8px;
+      width: auto;
+    }
+    .btn-back:hover { color: #aaa; }
+
     /* ---- Game ---- */
     #game { display: none; flex-direction: column; align-items: center; gap: 14px; }
 
@@ -95,6 +142,20 @@ export const HTML_TEMPLATE = `
       width: auto;
     }
     #copy-btn:hover { background: #1e1e1e; color: #ccc; }
+
+    /* ---- Mode badge ---- */
+    #mode-badge {
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 3px 10px;
+      border-radius: 5px;
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      color: #666;
+    }
+    #mode-badge.ai { background: #2a1a14; border-color: #f97b4f44; color: #f97b4f; }
 
     /* ---- Player cards ---- */
     #players-row {
@@ -368,11 +429,34 @@ export const HTML_TEMPLATE = `
   <div id="lobby">
     <span class="lobby-label">Your name</span>
     <input id="name-input" maxlength="20" placeholder="Enter your name" autocomplete="off" />
-    <button class="btn-primary" onclick="createGame()">Create Game</button>
-    <div class="divider">or join with a code</div>
-    <div id="join-row">
-      <input id="join-input" maxlength="6" placeholder="ROOM CODE" autocomplete="off" />
-      <button class="btn-secondary" style="width:auto;padding:11px 18px;" onclick="joinGame()">Join</button>
+
+    <!-- Mode selection -->
+    <div id="mode-select">
+      <button class="btn-primary" onclick="showMultiplayerOptions()">Play vs Friend</button>
+      <button class="btn-ai" onclick="showAiOptions()">Play vs AI</button>
+    </div>
+
+    <!-- Multiplayer options -->
+    <div id="mp-options">
+      <button class="btn-primary" onclick="createGame()">Create Game</button>
+      <div class="divider">or join with a code</div>
+      <div id="join-row">
+        <input id="join-input" maxlength="6" placeholder="ROOM CODE" autocomplete="off" />
+        <button class="btn-secondary" style="width:auto;padding:11px 18px;" onclick="joinGame()">Join</button>
+      </div>
+      <button class="btn-back" onclick="showModeSelect()">Back</button>
+    </div>
+
+    <!-- AI options -->
+    <div id="ai-options">
+      <span class="lobby-label">Difficulty</span>
+      <div id="difficulty-row">
+        <button class="btn-diff" data-diff="easy" onclick="selectDifficulty('easy')">Easy</button>
+        <button class="btn-diff" data-diff="medium" onclick="selectDifficulty('medium')">Medium</button>
+        <button class="btn-diff selected" data-diff="hard" onclick="selectDifficulty('hard')">Hard</button>
+      </div>
+      <button class="btn-ai" onclick="startAiGame()">Start Game</button>
+      <button class="btn-back" onclick="showModeSelect()">Back</button>
     </div>
   </div>
 
@@ -382,6 +466,7 @@ export const HTML_TEMPLATE = `
       Room:&nbsp;<span id="room-code"></span>
       <button id="copy-btn" onclick="copyLink()">Copy link</button>
     </div>
+    <div id="mode-badge"></div>
 
     <!-- Player cards -->
     <div id="players-row">
@@ -426,6 +511,9 @@ export const HTML_TEMPLATE = `
     let ws            = null;
     let mySymbol      = '';
     let currentRoom   = '';
+    let currentMode   = 'multiplayer';
+    let currentDifficulty = 'hard';
+    let selectedDifficulty = 'hard';
     let pendingRoom   = null;
     let lastPhase     = '';
     let confettiAnimId = null;
@@ -447,6 +535,42 @@ export const HTML_TEMPLATE = `
       return name;
     }
 
+    // ---- Mode selection ----
+
+    function showModeSelect() {
+      document.getElementById('mode-select').style.display = 'flex';
+      document.getElementById('mp-options').style.display = 'none';
+      document.getElementById('ai-options').style.display = 'none';
+    }
+
+    function showMultiplayerOptions() {
+      document.getElementById('mode-select').style.display = 'none';
+      document.getElementById('mp-options').style.display = 'flex';
+      document.getElementById('ai-options').style.display = 'none';
+    }
+
+    function showAiOptions() {
+      document.getElementById('mode-select').style.display = 'none';
+      document.getElementById('mp-options').style.display = 'none';
+      document.getElementById('ai-options').style.display = 'flex';
+    }
+
+    function selectDifficulty(diff) {
+      selectedDifficulty = diff;
+      document.querySelectorAll('.btn-diff').forEach(function(btn) {
+        btn.classList.toggle('selected', btn.dataset.diff === diff);
+      });
+    }
+
+    function startAiGame() {
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      let code = '';
+      const arr = new Uint8Array(6);
+      crypto.getRandomValues(arr);
+      arr.forEach(function(n) { code += chars[n % chars.length]; });
+      enterRoom(code, 'singleplayer', selectedDifficulty);
+    }
+
     // ---- Routing ----
 
     function init() {
@@ -462,6 +586,7 @@ export const HTML_TEMPLATE = `
           // New player via shared link — show lobby with room pre-filled.
           pendingRoom = room.toUpperCase();
           showLobby();
+          showMultiplayerOptions();
           document.getElementById('join-input').value = pendingRoom;
           document.getElementById('name-input').focus();
         }
@@ -475,8 +600,8 @@ export const HTML_TEMPLATE = `
       let code = '';
       const arr = new Uint8Array(6);
       crypto.getRandomValues(arr);
-      arr.forEach(n => { code += chars[n % chars.length]; });
-      enterRoom(code);
+      arr.forEach(function(n) { code += chars[n % chars.length]; });
+      enterRoom(code, 'multiplayer');
     }
 
     function joinGame() {
@@ -485,12 +610,14 @@ export const HTML_TEMPLATE = `
         document.getElementById('join-input').focus();
         return;
       }
-      enterRoom(raw);
+      enterRoom(raw, 'multiplayer');
     }
 
-    function enterRoom(code) {
+    function enterRoom(code, mode, difficulty) {
       pendingRoom = null;
       currentRoom = code;
+      currentMode = mode || 'multiplayer';
+      currentDifficulty = difficulty || 'hard';
       reconnectAttempts = 0;
       clearTimeout(reconnectTimer);
       window.history.pushState({}, '', '?room=' + code);
@@ -503,6 +630,8 @@ export const HTML_TEMPLATE = `
       clearTimeout(reconnectTimer);
       reconnectAttempts = MAX_RECONNECT_ATTEMPTS; // prevent auto-reconnect
       if (ws) { ws.close(1000); ws = null; }
+      currentMode = 'multiplayer';
+      currentDifficulty = 'hard';
       window.history.pushState({}, '', '/');
       showLobby();
     }
@@ -512,6 +641,7 @@ export const HTML_TEMPLATE = `
     function showLobby() {
       document.getElementById('lobby').style.display = 'flex';
       document.getElementById('game').style.display  = 'none';
+      showModeSelect();
     }
 
     function showGame() {
@@ -519,6 +649,22 @@ export const HTML_TEMPLATE = `
       document.getElementById('game').style.display  = 'flex';
       document.getElementById('reset-btn').style.display = 'none';
       document.getElementById('reset-prompt').style.display = 'none';
+
+      // Show/hide room banner based on mode.
+      const banner = document.getElementById('room-banner');
+      const badge = document.getElementById('mode-badge');
+      if (currentMode === 'singleplayer') {
+        banner.style.display = 'none';
+        badge.textContent = 'vs AI';
+        badge.className = 'ai';
+        badge.id = 'mode-badge';
+      } else {
+        banner.style.display = 'flex';
+        badge.textContent = 'Multiplayer';
+        badge.className = '';
+        badge.id = 'mode-badge';
+      }
+
       resetPlayerCards();
       setStatus('Connecting...', 'waiting');
     }
@@ -540,18 +686,24 @@ export const HTML_TEMPLATE = `
       const name     = getMyName();
       const proto    = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const url      = proto + '//' + location.host
-        + '/ws?room='   + encodeURIComponent(room)
-        + '&clientId='  + encodeURIComponent(clientId)
-        + '&name='      + encodeURIComponent(name);
+        + '/ws?room='       + encodeURIComponent(room)
+        + '&clientId='      + encodeURIComponent(clientId)
+        + '&name='          + encodeURIComponent(name)
+        + '&mode='          + encodeURIComponent(currentMode)
+        + '&difficulty='    + encodeURIComponent(currentDifficulty);
 
       ws = new WebSocket(url);
 
-      ws.onopen = () => {
+      ws.onopen = function() {
         reconnectAttempts = 0;
-        setStatus('Waiting for opponent...', 'waiting');
+        if (currentMode === 'singleplayer') {
+          setStatus('Starting game...', 'waiting');
+        } else {
+          setStatus('Waiting for opponent...', 'waiting');
+        }
       };
 
-      ws.onmessage = (event) => {
+      ws.onmessage = function(event) {
         const data = JSON.parse(event.data);
 
         if (data.type === 'init') {
@@ -559,6 +711,9 @@ export const HTML_TEMPLATE = `
         }
 
         if (data.type === 'state') {
+          // Update mode from server state.
+          if (data.gameMode) currentMode = data.gameMode;
+
           const isMyTurn = data.turn === mySymbol && !data.winner;
           renderBoard(data.board, data.winLine, isMyTurn);
           updatePlayerCards(data);
@@ -566,6 +721,7 @@ export const HTML_TEMPLATE = `
           updateSpectatorCount(data);
           updateScoreboard(data);
           updateResetPrompt(data);
+          updateModeBadge(data);
           handlePhaseTransition(data);
         }
 
@@ -578,11 +734,11 @@ export const HTML_TEMPLATE = `
         }
       };
 
-      ws.onerror = () => {
+      ws.onerror = function() {
         setStatus('Connection error.', 'lose');
       };
 
-      ws.onclose = (e) => {
+      ws.onclose = function(e) {
         if (e.code !== 1000) {
           attemptReconnect();
         }
@@ -600,7 +756,7 @@ export const HTML_TEMPLATE = `
         btn.textContent = 'Try Again';
         btn.className = 'btn-secondary';
         btn.style.cssText = 'width:auto;padding:6px 16px;margin-top:6px;font-size:0.85rem;';
-        btn.onclick = () => {
+        btn.onclick = function() {
           reconnectAttempts = 0;
           connectWS(currentRoom);
         };
@@ -611,14 +767,14 @@ export const HTML_TEMPLATE = `
       const delay = Math.pow(2, reconnectAttempts) * 1000; // 1s, 2s, 4s, 8s, 16s
       reconnectAttempts++;
       setStatus('Reconnecting in ' + (delay / 1000) + 's... (attempt ' + reconnectAttempts + '/' + MAX_RECONNECT_ATTEMPTS + ')', 'waiting');
-      reconnectTimer = setTimeout(() => {
+      reconnectTimer = setTimeout(function() {
         if (currentRoom) connectWS(currentRoom);
       }, delay);
     }
 
     // ---- beforeunload: clean close on tab close ----
 
-    window.addEventListener('beforeunload', () => {
+    window.addEventListener('beforeunload', function() {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.close(1000, 'tab_closed');
       }
@@ -642,7 +798,7 @@ export const HTML_TEMPLATE = `
       document.getElementById('name-x').textContent  = state.nameX || '\\u2014';
       document.getElementById('name-o').textContent  = state.nameO || '\\u2014';
       document.getElementById('badge-x').textContent = mySymbol === 'X' ? 'YOU' : '';
-      document.getElementById('badge-o').textContent = mySymbol === 'O' ? 'YOU' : '';
+      document.getElementById('badge-o').textContent = mySymbol === 'O' ? 'YOU' : (state.gameMode === 'singleplayer' ? 'AI' : '');
 
       cardX.className = 'player-card x';
       cardO.className = 'player-card o';
@@ -670,11 +826,31 @@ export const HTML_TEMPLATE = `
       }
     }
 
+    // ---- Mode badge ----
+
+    function updateModeBadge(state) {
+      const badge = document.getElementById('mode-badge');
+      const banner = document.getElementById('room-banner');
+      if (state.gameMode === 'singleplayer') {
+        banner.style.display = 'none';
+        const diffLabel = state.aiDifficulty ? state.aiDifficulty.charAt(0).toUpperCase() + state.aiDifficulty.slice(1) : 'Hard';
+        badge.textContent = 'vs AI (' + diffLabel + ')';
+        badge.className = 'ai';
+        badge.id = 'mode-badge';
+      } else {
+        banner.style.display = 'flex';
+        badge.textContent = '';
+        badge.className = '';
+        badge.id = 'mode-badge';
+      }
+    }
+
     // ---- Spectator count ----
 
     function updateSpectatorCount(state) {
       const el = document.getElementById('spectator-count');
-      const spectators = Math.max(0, (state.playersCount || 0) - 2);
+      const playerSlots = state.gameMode === 'singleplayer' ? 1 : 2;
+      const spectators = Math.max(0, (state.playersCount || 0) - playerSlots);
       el.textContent = spectators > 0 ? 'Spectators: ' + spectators : '';
     }
 
@@ -683,7 +859,7 @@ export const HTML_TEMPLATE = `
     function renderBoard(board, winLine, isMyTurn) {
       const boardDiv = document.getElementById('board');
       boardDiv.innerHTML = '';
-      board.forEach((cell, index) => {
+      board.forEach(function(cell, index) {
         const div   = document.createElement('div');
         const isWin = winLine && winLine.includes(index);
         let cls = 'cell';
@@ -692,14 +868,14 @@ export const HTML_TEMPLATE = `
         if (!cell && isMyTurn) cls += ' clickable';
         div.className   = cls;
         div.textContent = cell || '';
-        if (!cell) div.onclick = () => makeMove(index);
+        if (!cell) div.onclick = function() { makeMove(index); };
         boardDiv.appendChild(div);
       });
     }
 
     function makeMove(index) {
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'move', index }));
+        ws.send(JSON.stringify({ type: 'move', index: index }));
       }
     }
 
@@ -731,6 +907,16 @@ export const HTML_TEMPLATE = `
         return;
       }
 
+      // Single-player: show Play Again directly, no mutual protocol.
+      if (state.gameMode === 'singleplayer') {
+        prompt.style.display = 'none';
+        if (mySymbol === 'X') {
+          resetBtn.style.display = 'block';
+        }
+        return;
+      }
+
+      // Multiplayer: mutual reset protocol.
       if (state.resetRequestedBy) {
         if (state.resetRequestedBy === clientId) {
           // I requested — hide my button, show waiting text
@@ -759,9 +945,14 @@ export const HTML_TEMPLATE = `
       const nameO       = state.nameO || 'O';
       const myName      = mySymbol === 'X' ? nameX : mySymbol === 'O' ? nameO : 'You';
       const opponentName = mySymbol === 'X' ? nameO : nameX;
+      const isSingleplayer = state.gameMode === 'singleplayer';
 
       if (state.phase === 'waiting') {
-        setStatus('Waiting for opponent...', 'waiting');
+        if (isSingleplayer) {
+          setStatus('Starting game...', 'waiting');
+        } else {
+          setStatus('Waiting for opponent...', 'waiting');
+        }
         resetBtn.style.display = 'none';
         return;
       }
@@ -769,7 +960,7 @@ export const HTML_TEMPLATE = `
       if (state.winner) {
         if (mySymbol === 'X' || mySymbol === 'O') {
           // Only show reset button for actual players, not spectators
-          if (!state.resetRequestedBy) {
+          if (!state.resetRequestedBy && !isSingleplayer) {
             resetBtn.style.display = 'block';
           }
         } else {
@@ -781,7 +972,11 @@ export const HTML_TEMPLATE = `
         } else if (state.winner === mySymbol) {
           setStatus('You win, ' + myName + '!', 'win');
         } else {
-          setStatus(opponentName + ' wins!', 'lose');
+          if (isSingleplayer && mySymbol === 'X') {
+            setStatus('AI wins!', 'lose');
+          } else {
+            setStatus(opponentName + ' wins!', 'lose');
+          }
         }
       } else {
         resetBtn.style.display = 'none';
@@ -791,7 +986,11 @@ export const HTML_TEMPLATE = `
         } else if (state.turn === mySymbol) {
           setStatus('Your turn!', 'your-turn');
         } else {
-          setStatus(opponentName + "'s turn...", 'waiting');
+          if (isSingleplayer) {
+            setStatus('AI is thinking...', 'waiting');
+          } else {
+            setStatus(opponentName + "'s turn...", 'waiting');
+          }
         }
       }
     }
@@ -899,20 +1098,20 @@ export const HTML_TEMPLATE = `
 
     function copyLink() {
       const link = location.origin + '?room=' + currentRoom;
-      navigator.clipboard.writeText(link).then(() => {
+      navigator.clipboard.writeText(link).then(function() {
         const btn = document.getElementById('copy-btn');
         btn.textContent = 'Copied!';
-        setTimeout(() => { btn.textContent = 'Copy link'; }, 2000);
+        setTimeout(function() { btn.textContent = 'Copy link'; }, 2000);
       });
     }
 
     // Allow Enter in the join input to submit.
-    document.getElementById('join-input').addEventListener('keydown', (e) => {
+    document.getElementById('join-input').addEventListener('keydown', function(e) {
       if (e.key === 'Enter') joinGame();
     });
 
     // Allow Enter in the name input to join pending room or move focus.
-    document.getElementById('name-input').addEventListener('keydown', (e) => {
+    document.getElementById('name-input').addEventListener('keydown', function(e) {
       if (e.key === 'Enter') {
         if (pendingRoom) {
           enterRoom(pendingRoom);

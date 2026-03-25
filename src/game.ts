@@ -8,6 +8,7 @@ import {
   GamePhase,
   CellValue,
   PlayerSymbol,
+  Scoreboard,
   SocketAttachment,
   IncomingMessage,
   MoveResult,
@@ -66,7 +67,11 @@ export class TicTacToe {
   nameX: string | null;
   nameO: string | null;
   resetRequestedBy: string | null;
+  lastStarter: PlayerSymbol;
   lastRoomActivity: number;
+  winsX: number;
+  winsO: number;
+  draws: number;
   stateLoaded: boolean;
 
   constructor(state: DurableObjectState, env: Env) {
@@ -82,7 +87,11 @@ export class TicTacToe {
     this.nameX = null;
     this.nameO = null;
     this.resetRequestedBy = null;
+    this.lastStarter = 'X';
     this.lastRoomActivity = Date.now();
+    this.winsX = 0;
+    this.winsO = 0;
+    this.draws = 0;
     this.stateLoaded = false;
   }
 
@@ -101,7 +110,14 @@ export class TicTacToe {
       this.nameX = stored.nameX ?? null;
       this.nameO = stored.nameO ?? null;
       this.resetRequestedBy = stored.resetRequestedBy ?? null;
+      this.lastStarter = stored.lastStarter ?? 'X';
       this.lastRoomActivity = stored.lastRoomActivity ?? Date.now();
+    }
+    const scoreboard = await this.state.storage.get<Scoreboard>('scoreboard');
+    if (scoreboard) {
+      this.winsX = scoreboard.winsX;
+      this.winsO = scoreboard.winsO;
+      this.draws = scoreboard.draws;
     }
     this.stateLoaded = true;
   }
@@ -118,7 +134,16 @@ export class TicTacToe {
       nameX: this.nameX,
       nameO: this.nameO,
       resetRequestedBy: this.resetRequestedBy,
+      lastStarter: this.lastStarter,
       lastRoomActivity: this.lastRoomActivity,
+    });
+  }
+
+  async saveScoreboard(): Promise<void> {
+    await this.state.storage.put<Scoreboard>('scoreboard', {
+      winsX: this.winsX,
+      winsO: this.winsO,
+      draws: this.draws,
     });
   }
 
@@ -235,6 +260,10 @@ export class TicTacToe {
 
         if (this.winner) {
           this.phase = 'finished';
+          if (this.winner === 'X') this.winsX++;
+          else if (this.winner === 'O') this.winsO++;
+          else if (this.winner === 'Draw') this.draws++;
+          await this.saveScoreboard();
         } else {
           // Switch turns.
           this.turn = this.turn === 'X' ? 'O' : 'X';
@@ -254,10 +283,16 @@ export class TicTacToe {
         this.broadcastState();
       } else if (this.resetRequestedBy !== clientId) {
         // Second player agrees — execute reset.
+        // Winner starts next; on draw, alternate starter.
+        if (this.winner === 'X' || this.winner === 'O') {
+          this.turn = this.winner as PlayerSymbol;
+        } else {
+          this.turn = this.lastStarter === 'X' ? 'O' : 'X';
+        }
+        this.lastStarter = this.turn;
         this.board = Array(9).fill(null) as CellValue[];
         this.winner = null;
         this.winLine = null;
-        this.turn = 'X';
         this.phase = 'playing';
         this.resetRequestedBy = null;
         await this.saveState();
@@ -287,8 +322,13 @@ export class TicTacToe {
       this.nameX = null;
       this.nameO = null;
       this.resetRequestedBy = null;
+      this.lastStarter = 'X';
       this.lastRoomActivity = Date.now();
+      this.winsX = 0;
+      this.winsO = 0;
+      this.draws = 0;
       await this.saveState();
+      await this.state.storage.delete('scoreboard');
     } else {
       this.broadcastState();
     }
@@ -309,7 +349,12 @@ export class TicTacToe {
       this.nameX = null;
       this.nameO = null;
       this.resetRequestedBy = null;
+      this.lastStarter = 'X';
+      this.winsX = 0;
+      this.winsO = 0;
+      this.draws = 0;
       await this.saveState();
+      await this.state.storage.delete('scoreboard');
     } else {
       this.broadcastState();
     }
@@ -357,6 +402,9 @@ export class TicTacToe {
       nameX: this.nameX,
       nameO: this.nameO,
       resetRequestedBy: this.resetRequestedBy,
+      winsX: this.winsX,
+      winsO: this.winsO,
+      draws: this.draws,
     });
     for (const ws of activeSockets) {
       try {

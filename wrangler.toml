@@ -9,3 +9,7 @@ class_name = "TicTacToe"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["TicTacToe"]
+
+routes = [
+  { pattern = "tictactoe.ksanthoshkumar.com/*", custom_domain = true }
+]

@@ -288,6 +288,77 @@ export const HTML_TEMPLATE = `
     .win       { color: #6ee86e; font-weight: 700; }
     .lose      { color: #666; }
     .draw      { color: #f9d44f; font-weight: 700; }
+
+    /* ---- Scoreboard ---- */
+    #scoreboard {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 6px 18px;
+      border-radius: 8px;
+      background: #131313;
+      border: 1px solid #1e1e1e;
+    }
+    .score-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1px;
+    }
+    .score-value {
+      font-size: 1.3rem;
+      font-weight: 800;
+      line-height: 1.2;
+    }
+    .score-label {
+      font-size: 0.6rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #555;
+    }
+    .score-item.x .score-value { color: #4f9cf9; }
+    .score-item.o .score-value { color: #f97b4f; }
+    .score-item.draw .score-value { color: #f9d44f; }
+
+    /* ---- Win animation ---- */
+    .cell.winning {
+      animation: winPulse 1.2s ease-in-out infinite;
+    }
+    @keyframes winPulse {
+      0%, 100% { transform: scale(1); box-shadow: inset 0 0 14px rgba(110,232,110,0.12); }
+      50%      { transform: scale(1.08); box-shadow: inset 0 0 22px rgba(110,232,110,0.3), 0 0 12px rgba(110,232,110,0.15); }
+    }
+
+    .win-celebration {
+      animation: celebrateText 0.6s ease-out;
+    }
+    @keyframes celebrateText {
+      0%   { transform: scale(0.5); opacity: 0; }
+      70%  { transform: scale(1.15); }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    .draw-animation {
+      animation: drawShake 0.5s ease-in-out;
+    }
+    @keyframes drawShake {
+      0%, 100% { transform: translateX(0); }
+      20%      { transform: translateX(-4px); }
+      40%      { transform: translateX(4px); }
+      60%      { transform: translateX(-3px); }
+      80%      { transform: translateX(3px); }
+    }
+
+    #confetti-canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 9999;
+    }
   </style>
 </head>
 <body>
@@ -329,6 +400,12 @@ export const HTML_TEMPLATE = `
       </div>
     </div>
 
+    <div id="scoreboard">
+      <div class="score-item x"><span id="score-x" class="score-value">0</span><span class="score-label">Wins</span></div>
+      <div class="score-item draw"><span id="score-draws" class="score-value">0</span><span class="score-label">Draws</span></div>
+      <div class="score-item o"><span id="score-o" class="score-value">0</span><span class="score-label">Wins</span></div>
+    </div>
+
     <div id="spectator-count"></div>
     <div id="status"></div>
     <div id="board"></div>
@@ -343,10 +420,15 @@ export const HTML_TEMPLATE = `
     <button id="back-btn" class="btn-secondary" onclick="goLobby()">Back to Lobby</button>
   </div>
 
+  <canvas id="confetti-canvas"></canvas>
+
   <script>
     let ws            = null;
     let mySymbol      = '';
     let currentRoom   = '';
+    let pendingRoom   = null;
+    let lastPhase     = '';
+    let confettiAnimId = null;
     let reconnectAttempts = 0;
     let reconnectTimer   = null;
     const MAX_RECONNECT_ATTEMPTS = 5;
@@ -372,7 +454,17 @@ export const HTML_TEMPLATE = `
       const params = new URLSearchParams(window.location.search);
       const room = params.get('room');
       if (room && /^[A-Z0-9]{6}$/i.test(room)) {
-        enterRoom(room.toUpperCase());
+        const savedName = localStorage.getItem('ttt_name');
+        if (savedName) {
+          // Returning player — join immediately.
+          enterRoom(room.toUpperCase());
+        } else {
+          // New player via shared link — show lobby with room pre-filled.
+          pendingRoom = room.toUpperCase();
+          showLobby();
+          document.getElementById('join-input').value = pendingRoom;
+          document.getElementById('name-input').focus();
+        }
       } else {
         showLobby();
       }
@@ -397,6 +489,7 @@ export const HTML_TEMPLATE = `
     }
 
     function enterRoom(code) {
+      pendingRoom = null;
       currentRoom = code;
       reconnectAttempts = 0;
       clearTimeout(reconnectTimer);
@@ -471,7 +564,9 @@ export const HTML_TEMPLATE = `
           updatePlayerCards(data);
           updateStatus(data);
           updateSpectatorCount(data);
+          updateScoreboard(data);
           updateResetPrompt(data);
+          handlePhaseTransition(data);
         }
 
         if (data.type === 'room_full') {
@@ -711,6 +806,97 @@ export const HTML_TEMPLATE = `
       el.appendChild(span);
     }
 
+    // ---- Scoreboard ----
+
+    function updateScoreboard(state) {
+      document.getElementById('score-x').textContent = String(state.winsX || 0);
+      document.getElementById('score-o').textContent = String(state.winsO || 0);
+      document.getElementById('score-draws').textContent = String(state.draws || 0);
+    }
+
+    // ---- Phase transition & animations ----
+
+    function handlePhaseTransition(state) {
+      if (state.phase === 'finished' && lastPhase !== 'finished') {
+        const statusSpan = document.querySelector('#status span');
+        if (state.winner && state.winner !== 'Draw') {
+          launchConfetti();
+          if (statusSpan) statusSpan.classList.add('win-celebration');
+        } else if (state.winner === 'Draw') {
+          if (statusSpan) statusSpan.classList.add('draw-animation');
+        }
+      }
+      if (state.phase !== 'finished' && lastPhase === 'finished') {
+        cancelConfetti();
+      }
+      lastPhase = state.phase;
+    }
+
+    // ---- Confetti ----
+
+    function launchConfetti() {
+      cancelConfetti();
+      const canvas = document.getElementById('confetti-canvas');
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      const ctx = canvas.getContext('2d');
+      const colors = ['#4f9cf9', '#f97b4f', '#6ee86e', '#f9d44f', '#e86edb', '#fff'];
+      const particles = [];
+      for (let i = 0; i < 120; i++) {
+        particles.push({
+          x: canvas.width / 2 + (Math.random() - 0.5) * 100,
+          y: canvas.height / 2,
+          vx: (Math.random() - 0.5) * 16,
+          vy: (Math.random() - 1) * 14 - 4,
+          w: Math.random() * 8 + 4,
+          h: Math.random() * 6 + 2,
+          color: colors[Math.floor(Math.random() * colors.length)],
+          rotation: Math.random() * Math.PI * 2,
+          rotSpeed: (Math.random() - 0.5) * 0.3,
+          alpha: 1,
+          decay: 0.008 + Math.random() * 0.008,
+        });
+      }
+      function frame() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        let alive = false;
+        for (const p of particles) {
+          if (p.alpha <= 0) continue;
+          alive = true;
+          p.x += p.vx;
+          p.vy += 0.35;
+          p.y += p.vy;
+          p.rotation += p.rotSpeed;
+          p.alpha -= p.decay;
+          if (p.alpha < 0) p.alpha = 0;
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.rotation);
+          ctx.globalAlpha = p.alpha;
+          ctx.fillStyle = p.color;
+          ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+          ctx.restore();
+        }
+        if (alive) {
+          confettiAnimId = requestAnimationFrame(frame);
+        } else {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          confettiAnimId = null;
+        }
+      }
+      confettiAnimId = requestAnimationFrame(frame);
+    }
+
+    function cancelConfetti() {
+      if (confettiAnimId) {
+        cancelAnimationFrame(confettiAnimId);
+        confettiAnimId = null;
+      }
+      const canvas = document.getElementById('confetti-canvas');
+      const ctx = canvas.getContext('2d');
+      if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
     function copyLink() {
       const link = location.origin + '?room=' + currentRoom;
       navigator.clipboard.writeText(link).then(() => {
@@ -725,9 +911,15 @@ export const HTML_TEMPLATE = `
       if (e.key === 'Enter') joinGame();
     });
 
-    // Allow Enter in the name input to move focus to room code field.
+    // Allow Enter in the name input to join pending room or move focus.
     document.getElementById('name-input').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') document.getElementById('join-input').focus();
+      if (e.key === 'Enter') {
+        if (pendingRoom) {
+          enterRoom(pendingRoom);
+        } else {
+          document.getElementById('join-input').focus();
+        }
+      }
     });
 
     // Handle browser back/forward navigation.

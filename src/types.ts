@@ -10,6 +10,12 @@ export interface Env {
   GAME_ROOM: DurableObjectNamespace;
 }
 
+export interface Scoreboard {
+  winsX: number;
+  winsO: number;
+  draws: number;
+}
+
 export interface GameState {
   board: CellValue[];
   turn: PlayerSymbol;
@@ -21,6 +27,7 @@ export interface GameState {
   nameX: string | null;
   nameO: string | null;
   resetRequestedBy: string | null;
+  lastStarter: PlayerSymbol;
   lastRoomActivity: number;
 }
 

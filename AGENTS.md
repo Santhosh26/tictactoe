@@ -7,18 +7,20 @@ this repository. It is intended for AI coding agents and human contributors.
 
 ## Project Overview
 
-A real-time multiplayer Tic-Tac-Toe game deployed as a **Cloudflare Worker**.
-The entire application lives in a single TypeScript file (`src/index.ts`).
+A real-time **multiplayer & single-player Tic-Tac-Toe game** deployed as a **Cloudflare Worker**,
+showcasing Durable Objects, WebSockets, Dynamic Workers sandboxing, and an AI engine with
+a real-time Developer Insights panel for observing Cloudflare internals.
 
-| Attribute        | Value                                         |
-|------------------|-----------------------------------------------|
-| Language         | TypeScript 6                                  |
-| Runtime          | Cloudflare Workers (edge, not Node.js)        |
-| Key primitive    | Durable Objects + WebSockets                  |
-| Entry point      | `src/index.ts` (router); `src/game.ts` (DO)   |
-| Build tool       | Wrangler 4 (uses esbuild internally)          |
-| Module format    | `"type": "commonjs"` in package.json          |
-| Type definitions | `@cloudflare/workers-types`                   |
+| Attribute        | Value                                                          |
+|------------------|----------------------------------------------------------------|
+| Language         | TypeScript 6                                                   |
+| Runtime          | Cloudflare Workers (edge, not Node.js)                         |
+| Key primitives   | Durable Objects + WebSockets + Dynamic Workers (optional)      |
+| Entry point      | `src/index.ts` (router); `src/game.ts` (DO)                   |
+| Build tool       | Wrangler 4 (uses esbuild internally)                           |
+| Module format    | `"type": "commonjs"` in package.json                           |
+| Type definitions | `@cloudflare/workers-types`                                    |
+| Test framework   | Vitest 4 + `@cloudflare/vitest-pool-workers`                   |
 
 ---
 
@@ -38,14 +40,10 @@ npx wrangler deploy       # Deploy to Cloudflare Workers
 
 ### Type Checking
 
-There is no `tsconfig.json` at the project root. Wrangler uses its own bundled
-tsconfig that extends `@cloudflare/workers-tsconfig`. Type checking happens
-implicitly during `wrangler dev` / `wrangler deploy`.
-
-To run a standalone type check without deploying:
+A `tsconfig.json` exists at the project root. To run a standalone type check:
 
 ```bash
-npx tsc --noEmit --types @cloudflare/workers-types src/index.ts
+npx tsc --noEmit
 ```
 
 ### Lint / Format
@@ -55,29 +53,31 @@ Do not add linting/formatting tooling unless explicitly requested.
 
 ### Tests
 
-**No tests are currently configured.** The `npm test` script is a placeholder
-that exits with an error.
-
-When tests are added, the idiomatic approach for Cloudflare Workers is:
+Tests use **Vitest** with **`@cloudflare/vitest-pool-workers`** so they run
+inside the Workers runtime. Config is in `vitest.config.mts` (`.mts` required
+since the package is ESM-only while the project uses CommonJS).
 
 ```bash
-# Install test dependencies (not yet present)
-npm install --save-dev vitest @cloudflare/vitest-pool-workers
-
 # Run all tests
-npx vitest run
+npm test                  # runs `vitest run`
+
+# Watch mode
+npm run test:watch        # runs `vitest`
 
 # Run a single test file
-npx vitest run src/__tests__/index.test.ts
+npx vitest run src/__tests__/sandbox.test.ts
 
 # Run a single test by name
 npx vitest run --reporter=verbose -t "test name here"
-
-# Watch mode
-npx vitest
 ```
 
-Place test files in `src/__tests__/` following the pattern `*.test.ts`.
+**Test files** (in `src/__tests__/`):
+
+| File               | Coverage                                                  | Tests |
+|--------------------|-----------------------------------------------------------|-------|
+| `sandbox.test.ts`  | Game rules (`validateAndApply`), AI engine (`computeAiMove`) | 26  |
+| `game.test.ts`     | Durable Object integration (WS, state machine, AI, reset)   | 15  |
+| `index.test.ts`    | Worker router (routes, validation, security headers)         | 22  |
 
 ---
 
@@ -86,18 +86,21 @@ Place test files in `src/__tests__/` following the pattern `*.test.ts`.
 ```
 tictactoe/
 ├── src/
-│   ├── index.ts          # Worker router (~50 lines): CSP headers, Origin check, re-exports
-│   ├── game.ts           # TicTacToe Durable Object: state machine, WS, rate limiting, sandbox
-│   ├── sandbox.ts        # Game rules module (local + Dynamic Worker isolate string)
-│   ├── types.ts          # Shared interfaces, types, and constants
-│   └── frontend.ts       # HTML_TEMPLATE export with XSS-safe DOM methods and reconnection
-├── wrangler.toml         # Cloudflare Workers deployment config
+│   ├── index.ts              # Worker router (~50 lines): CSP headers, Origin check, re-exports
+│   ├── game.ts               # TicTacToe Durable Object: state machine, WS, rate limiting, sandbox, debug events
+│   ├── sandbox.ts            # Game rules + AI engine (minimax with alpha-beta pruning)
+│   ├── types.ts              # Shared interfaces, types, constants, DebugEvent
+│   ├── frontend.ts           # HTML_TEMPLATE: game UI, lobby, AI mode, Developer Insights panel
+│   └── __tests__/
+│       ├── sandbox.test.ts   # Unit tests for game rules + AI engine
+│       ├── game.test.ts      # Integration tests for Durable Object
+│       └── index.test.ts     # Router & validation tests
+├── vitest.config.mts         # Vitest config (cloudflareTest plugin + cloudflarePool)
+├── tsconfig.json             # TypeScript config (includes test types)
+├── wrangler.toml             # Cloudflare Workers deployment config
 ├── package.json
 └── package-lock.json
 ```
-
-The application was split into multiple files to accommodate sandboxing, rate
-limiting, alarms, a state machine, and a mutual reset protocol.
 
 ---
 
@@ -127,10 +130,10 @@ Do not use `require()`.
 | Construct               | Convention              | Example                    |
 |-------------------------|-------------------------|----------------------------|
 | Classes                 | `PascalCase`            | `TicTacToe`                |
-| Interfaces              | `PascalCase`            | `Env`                      |
+| Interfaces              | `PascalCase`            | `Env`, `DebugEvent`        |
 | Methods & functions     | `camelCase`             | `broadcastState()`         |
-| Variables & properties  | `camelCase`             | `playerSymbol`, `sessions` |
-| Constants (module-level)| `SCREAMING_SNAKE_CASE`  | `HTML_CONTENT`             |
+| Variables & properties  | `camelCase`             | `playerSymbol`, `debugLog` |
+| Constants (module-level)| `SCREAMING_SNAKE_CASE`  | `HTML_TEMPLATE`            |
 | Durable Object bindings | `SCREAMING_SNAKE_CASE`  | `GAME_ROOM`                |
 | Boolean variables       | `is`/`has` prefix preferred | `isConnected`          |
 
@@ -155,10 +158,10 @@ Each source file has a banner comment at the top using `// ===` style:
 ```
 
 - `src/index.ts` — Worker router + security headers + re-exports
-- `src/game.ts` — Durable Object (state machine, WebSocket handlers, alarms, sandbox)
-- `src/sandbox.ts` — Game rules (local function + string module for Dynamic Workers)
-- `src/types.ts` — Shared interfaces, types, and constants
-- `src/frontend.ts` — HTML template (XSS-safe, auto-reconnect, mutual reset)
+- `src/game.ts` — Durable Object (state machine, WebSocket handlers, alarms, sandbox, debug instrumentation)
+- `src/sandbox.ts` — Game rules + AI engine (minimax with alpha-beta, 3 difficulty levels)
+- `src/types.ts` — Shared interfaces, types, constants, and DebugEvent
+- `src/frontend.ts` — HTML template (XSS-safe, auto-reconnect, mutual reset, AI mode, Developer Insights panel)
 
 Use inline `// Comment` style for short explanatory notes; avoid block comments
 (`/* */`) unless documenting a public API.
@@ -172,37 +175,159 @@ Use inline `// Comment` style for short explanatory notes; avoid block comments
 ### Error Handling
 
 - HTTP-level errors are returned as `new Response('message', { status: NNN })`.
-  - 401 — unauthorized (e.g., wrong password)
+  - 400 — invalid room code, mode, or difficulty
+  - 403 — origin mismatch
   - 404 — route not found
   - 426 — non-WebSocket request to WebSocket endpoint
-- There are no `try/catch` blocks in the server code. For new code, only add
-  `try/catch` where failure is genuinely expected and recoverable.
+  - 503 — room full
+- Only add `try/catch` where failure is genuinely expected and recoverable
+  (JSON parse, ws.send).
 - Do not throw exceptions across Worker boundaries; always return a `Response`.
-- Frontend (inline JS) uses `ws.onerror` for connection-level errors. Avoid
-  `alert()` in new code; prefer updating a status element in the DOM.
+- Frontend uses `ws.onerror` for connection-level errors. Avoid `alert()`;
+  prefer updating a status element in the DOM.
 
 ### WebSocket & Durable Object Patterns
 
 - Use `this.state.acceptWebSocket(server)` to hibernate the WebSocket into the
   Durable Object (enables hibernation billing model).
-- Track sessions with `Map<WebSocket, PlayerSymbol>` where the symbol is a
-  descriptive string (`'X'`, `'O'`, `'Spectator'`).
+- Track session data via `server.serializeAttachment()` / `ws.deserializeAttachment()`
+  storing a `SocketAttachment` object with `{ symbol, clientId, name }`.
 - After every state mutation, call `broadcastState()` to sync all connected
-  clients.
-- Game state is in-memory on the Durable Object instance. If persistence across
-  restarts is needed, use `this.state.storage` (SQLite is already enabled via
-  the `new_sqlite_classes` migration).
+  clients (includes debug events which are flushed after each broadcast).
+- Game state is persisted via `this.state.storage.put()` with smart caching
+  (`ensureState()` loads from storage only once per DO wake cycle).
 
 ### Frontend (Inline HTML)
 
-The frontend is a template literal constant `HTML_CONTENT` in `src/index.ts`.
+The frontend is a template literal constant `HTML_TEMPLATE` in `src/frontend.ts`.
 
 - Keep all CSS inline in the `<style>` block; no external stylesheets.
 - Keep all JS inline in the `<script>` block; no external scripts.
 - Use `var`-free JS (`let`/`const`). The existing code uses `let ws` because
   it is reassigned; use `const` everywhere else.
 - Prefer `element.textContent` over `element.innerText` for non-HTML text
-  updates. Use `element.innerHTML` only when rendering HTML markup.
+  updates. **Never use `innerHTML` for user-supplied data** (XSS prevention).
+- The frontend includes a lobby (mode selection), game board, and a Developer
+  Insights side panel that renders debug events from the Durable Object.
+
+---
+
+## Single-Player AI Mode
+
+Players can choose **Play vs Friend** (multiplayer) or **Play vs AI** (single-player)
+from the lobby. AI difficulty levels:
+
+| Difficulty | Algorithm | Behavior |
+|------------|-----------|----------|
+| Easy       | Random    | Picks a random empty cell |
+| Medium     | 50/50     | 50% chance minimax, 50% chance random |
+| Hard       | Minimax + alpha-beta pruning | Unbeatable — perfect play |
+
+Key implementation details:
+
+- `GameMode` type: `'multiplayer' | 'singleplayer'`
+- `AiDifficulty` type: `'easy' | 'medium' | 'hard'`
+- AI is the O player, represented by sentinel `playerO = '__AI__'`
+- `computeAiMove()` in `src/sandbox.ts` — the AI engine
+- `executeAiMove()` in `src/game.ts` — DO method with 250ms delay for natural feel
+- Single-player uses immediate reset (no mutual protocol)
+- Mode and difficulty are passed as query params on the `/ws` route
+
+---
+
+## Developer Insights Panel
+
+A real-time side panel that shows Cloudflare internals as the game is played,
+designed to educate audiences about Durable Objects, Workers, and Dynamic Workers.
+
+### Architecture
+
+- **Data delivery**: The `broadcastState()` message includes a `debug` array
+  of `DebugEvent` objects. Events accumulate on a transient `debugLog` array
+  on the DO class, get flushed into each broadcast, then cleared. Never persisted.
+- **Frontend**: `updateDebugPanel(data)` is called from the `ws.onmessage`
+  handler. It updates both the live state section and the scrolling event log.
+- **Client-side events**: The frontend generates its own `worker`-category
+  events for actions it observes (e.g., "WebSocket connected", "Security headers applied").
+
+### DebugEvent Type
+
+```typescript
+type DebugEventCategory = 'worker' | 'durable-object' | 'websocket' | 'sandbox' | 'ai' | 'state-machine';
+
+interface DebugEvent {
+  ts: number;           // Date.now() timestamp
+  category: DebugEventCategory;
+  label: string;        // e.g., "State loaded from storage"
+  detail?: string;      // e.g., "Smart cache: first load this wake cycle"
+}
+```
+
+### Adding New Events
+
+To instrument a new event in the Durable Object:
+
+```typescript
+this.pushDebug('category', 'Short label', 'Optional detail');
+```
+
+The event will automatically be included in the next `broadcastState()` call
+and rendered in the frontend panel.
+
+### Color Coding
+
+| Category         | Color   |
+|------------------|---------|
+| `worker`         | Purple  |
+| `durable-object` | Blue    |
+| `websocket`      | Green   |
+| `sandbox`        | Yellow  |
+| `ai`             | Orange  |
+| `state-machine`  | Pink    |
+
+### Responsive Layout
+
+- **Desktop (≥1024px)**: Side-by-side — game on left, panel on right (340px wide, sticky)
+- **Mobile (<1024px)**: Panel below game, full width, max-height 260px
+
+---
+
+## Dynamic Workers (LOADER)
+
+Dynamic Workers allow running game rules in an isolated V8 sandbox with no
+network access, preventing cheating via code injection.
+
+### wrangler.toml Configuration
+
+```toml
+# Uncomment to enable (requires paid plan):
+# [[worker_loaders]]
+# binding = "LOADER"
+```
+
+### How It Works
+
+1. `executeInSandbox()` in `src/game.ts` checks if `env.LOADER` exists
+2. If available: calls `env.LOADER.load()` with the game rules as a string module,
+   `globalOutbound: null` (blocks all network access)
+3. If unavailable: falls back to local `validateAndApply()` function
+4. The `GAME_RULES_MODULE` string in `src/sandbox.ts` contains a self-contained
+   copy of the validation logic (must maintain its own `WINNING_LINES` since
+   it runs in an isolated context)
+
+### Typing
+
+The `DynamicWorkerLoader` interface in `src/types.ts` types the LOADER binding:
+
+```typescript
+interface DynamicWorkerLoader {
+  load(config: {
+    mainModule: string;
+    modules: Record<string, string>;
+    globalOutbound: null;
+  }): Promise<{ getEntrypoint(): { validateAndApply(...): MoveResult } }>;
+}
+```
 
 ---
 
@@ -212,15 +337,19 @@ The frontend is a template literal constant `HTML_CONTENT` in `src/index.ts`.
 - Durable Object binding name: `GAME_ROOM` → class `TicTacToe`
 - New Durable Object classes must be added to `[[durable_objects.bindings]]`
   and a corresponding `[[migrations]]` entry with a new unique `tag`.
+- Dynamic Workers binding uses `[[worker_loaders]]` with `binding = "LOADER"`.
 
 ---
 
 ## What Not to Do
 
-- Do not add a `tsconfig.json` unless Wrangler's implicit config is insufficient.
 - Do not add ESLint/Prettier unless explicitly requested.
-- Do not add new source files without clear justification (e.g., new game mode).
+- Do not add new source files without clear justification.
 - Do not commit `.wrangler/` — it contains local dev state.
 - Do not hardcode secrets in source. The password (`secret1!`) is a demo
   placeholder; production secrets should use Wrangler secrets
   (`wrangler secret put SECRET_NAME`).
+- Do not use `innerHTML` for user-supplied data — always use `textContent` or
+  DOM methods (XSS prevention).
+- Do not persist debug events to storage — they are transient and flushed after
+  each broadcast.

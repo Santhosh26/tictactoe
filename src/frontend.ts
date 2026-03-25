@@ -420,9 +420,173 @@ export const HTML_TEMPLATE = `
       pointer-events: none;
       z-index: 9999;
     }
+
+    /* ---- Developer Insights Panel ---- */
+    #debug-panel {
+      display: none;
+      flex-direction: column;
+      width: 340px;
+      max-height: 90vh;
+      background: #0a0a0a;
+      border: 1px solid #1e1e1e;
+      border-radius: 12px;
+      overflow: hidden;
+      font-size: 0.78rem;
+      flex-shrink: 0;
+    }
+    #debug-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: #111;
+      border-bottom: 1px solid #1e1e1e;
+    }
+    .debug-title {
+      font-weight: 700;
+      font-size: 0.82rem;
+      letter-spacing: 0.04em;
+      color: #ccc;
+    }
+    #debug-toggle {
+      background: none;
+      border: 1px solid #2a2a2a;
+      color: #777;
+      padding: 3px 10px;
+      font-size: 0.7rem;
+      cursor: pointer;
+      border-radius: 5px;
+      width: auto;
+      font-weight: 600;
+    }
+    #debug-toggle:hover { background: #1a1a1a; color: #ccc; }
+    #debug-body {
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .debug-section-title {
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #555;
+      padding: 8px 14px 4px;
+    }
+    /* Live state grid */
+    #debug-do-info {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px 10px;
+      padding: 4px 14px 10px;
+    }
+    .debug-kv {
+      display: flex;
+      flex-direction: column;
+    }
+    .debug-kv-key {
+      font-size: 0.62rem;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .debug-kv-val {
+      font-size: 0.78rem;
+      color: #ddd;
+      font-weight: 600;
+    }
+    /* Event log */
+    #debug-log {
+      padding: 6px 14px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      overflow-y: auto;
+      max-height: 400px;
+    }
+    .debug-event {
+      padding: 3px 0;
+      line-height: 1.35;
+      animation: debugFadeIn 0.3s ease-out;
+    }
+    @keyframes debugFadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .debug-event-header {
+      display: flex;
+      gap: 6px;
+      align-items: baseline;
+    }
+    .debug-ts {
+      color: #444;
+      font-size: 0.66rem;
+      font-family: monospace;
+      flex-shrink: 0;
+    }
+    .debug-cat {
+      font-size: 0.6rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 1px 5px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+    .debug-cat.worker         { background: #2a1f3a; color: #a78bfa; }
+    .debug-cat.durable-object { background: #152540; color: #4f9cf9; }
+    .debug-cat.websocket      { background: #152a15; color: #6ee86e; }
+    .debug-cat.sandbox        { background: #2a2815; color: #f9d44f; }
+    .debug-cat.ai             { background: #2a1a14; color: #f97b4f; }
+    .debug-cat.state-machine  { background: #2a152a; color: #e86edb; }
+    .debug-label {
+      color: #ccc;
+      font-weight: 600;
+    }
+    .debug-detail {
+      color: #666;
+      padding-left: 50px;
+      font-size: 0.7rem;
+    }
+
+    /* Layout: side-by-side on desktop */
+    @media (min-width: 1024px) {
+      body {
+        flex-direction: row;
+        align-items: flex-start;
+        justify-content: center;
+        gap: 30px;
+        padding: 30px;
+      }
+      #main-content {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 20px;
+        flex-shrink: 0;
+      }
+      #debug-panel {
+        position: sticky;
+        top: 20px;
+      }
+    }
+
+    /* Mobile: panel below game */
+    @media (max-width: 1023px) {
+      #debug-panel {
+        width: 100%;
+        max-width: 400px;
+        max-height: 260px;
+      }
+      #debug-log {
+        max-height: 150px;
+      }
+    }
   </style>
 </head>
 <body>
+  <div id="main-content">
   <h1>Tic-Tac-Toe</h1>
 
   <!-- Lobby -->
@@ -503,6 +667,22 @@ export const HTML_TEMPLATE = `
       </div>
     </div>
     <button id="back-btn" class="btn-secondary" onclick="goLobby()">Back to Lobby</button>
+  </div>
+
+  </div><!-- /main-content -->
+
+  <!-- Developer Insights Panel -->
+  <div id="debug-panel">
+    <div id="debug-header">
+      <span class="debug-title">Cloudflare Internals</span>
+      <button id="debug-toggle" onclick="toggleDebugPanel()">Hide</button>
+    </div>
+    <div id="debug-body">
+      <div class="debug-section-title">Durable Object State</div>
+      <div id="debug-do-info"></div>
+      <div class="debug-section-title">Event Log</div>
+      <div id="debug-log"></div>
+    </div>
   </div>
 
   <canvas id="confetti-canvas"></canvas>
@@ -632,6 +812,11 @@ export const HTML_TEMPLATE = `
       if (ws) { ws.close(1000); ws = null; }
       currentMode = 'multiplayer';
       currentDifficulty = 'hard';
+      // Reset debug panel counters.
+      debugStorageReads = 0;
+      debugStorageWrites = 0;
+      debugSandboxMode = 'Unknown';
+      document.getElementById('debug-log').innerHTML = '';
       window.history.pushState({}, '', '/');
       showLobby();
     }
@@ -641,6 +826,7 @@ export const HTML_TEMPLATE = `
     function showLobby() {
       document.getElementById('lobby').style.display = 'flex';
       document.getElementById('game').style.display  = 'none';
+      hideDebugPanel();
       showModeSelect();
     }
 
@@ -649,6 +835,7 @@ export const HTML_TEMPLATE = `
       document.getElementById('game').style.display  = 'flex';
       document.getElementById('reset-btn').style.display = 'none';
       document.getElementById('reset-prompt').style.display = 'none';
+      showDebugPanel();
 
       // Show/hide room banner based on mode.
       const banner = document.getElementById('room-banner');
@@ -696,6 +883,8 @@ export const HTML_TEMPLATE = `
 
       ws.onopen = function() {
         reconnectAttempts = 0;
+        addClientDebugEvent('worker', 'WebSocket connected', 'Route: /ws, Room: ' + room);
+        addClientDebugEvent('worker', 'Security headers applied', 'CSP, X-Frame-Options, X-Content-Type-Options');
         if (currentMode === 'singleplayer') {
           setStatus('Starting game...', 'waiting');
         } else {
@@ -723,6 +912,7 @@ export const HTML_TEMPLATE = `
           updateResetPrompt(data);
           updateModeBadge(data);
           handlePhaseTransition(data);
+          updateDebugPanel(data);
         }
 
         if (data.type === 'room_full') {
@@ -1123,6 +1313,134 @@ export const HTML_TEMPLATE = `
 
     // Handle browser back/forward navigation.
     window.addEventListener('popstate', init);
+
+    // ---- Developer Insights Panel ----
+
+    let debugPanelVisible = true;
+    let debugStorageReads = 0;
+    let debugStorageWrites = 0;
+    let debugSandboxMode = 'Unknown';
+    const DEBUG_MAX_EVENTS = 100;
+
+    function toggleDebugPanel() {
+      debugPanelVisible = !debugPanelVisible;
+      const body = document.getElementById('debug-body');
+      const btn = document.getElementById('debug-toggle');
+      body.style.display = debugPanelVisible ? 'flex' : 'none';
+      btn.textContent = debugPanelVisible ? 'Hide' : 'Show';
+    }
+
+    function showDebugPanel() {
+      document.getElementById('debug-panel').style.display = 'flex';
+    }
+
+    function hideDebugPanel() {
+      document.getElementById('debug-panel').style.display = 'none';
+    }
+
+    function updateDebugPanel(data) {
+      // Update live state section.
+      updateDebugState(data);
+      // Append new debug events.
+      if (data.debug && data.debug.length > 0) {
+        for (let i = 0; i < data.debug.length; i++) {
+          var evt = data.debug[i];
+          appendDebugEvent(evt);
+          // Track storage stats from events.
+          if (evt.category === 'durable-object') {
+            if (evt.label.indexOf('loaded') !== -1) debugStorageReads++;
+            if (evt.label.indexOf('persisted') !== -1) debugStorageWrites++;
+          }
+          if (evt.category === 'sandbox') {
+            if (evt.label.indexOf('Dynamic Worker') !== -1) debugSandboxMode = 'Dynamic Worker isolate';
+            else if (evt.label.indexOf('local') !== -1) debugSandboxMode = 'Local fallback';
+          }
+        }
+      }
+    }
+
+    function updateDebugState(data) {
+      var el = document.getElementById('debug-do-info');
+      el.innerHTML = '';
+      var items = [
+        ['Game Mode', data.gameMode === 'singleplayer' ? 'Single (' + (data.aiDifficulty || 'hard') + ')' : 'Multiplayer'],
+        ['Phase', data.phase],
+        ['Connections', String(data.playersCount || 0) + (data.gameMode === 'singleplayer' ? ' + AI' : '')],
+        ['Storage R/W', debugStorageReads + ' / ' + debugStorageWrites],
+        ['Sandbox', debugSandboxMode],
+        ['Turn', data.turn || '-'],
+      ];
+      for (var i = 0; i < items.length; i++) {
+        var kv = document.createElement('div');
+        kv.className = 'debug-kv';
+        var k = document.createElement('span');
+        k.className = 'debug-kv-key';
+        k.textContent = items[i][0];
+        var v = document.createElement('span');
+        v.className = 'debug-kv-val';
+        v.textContent = items[i][1];
+        // Color-code phase.
+        if (items[i][0] === 'Phase') {
+          if (data.phase === 'playing') v.style.color = '#6ee86e';
+          else if (data.phase === 'finished') v.style.color = '#f97b4f';
+          else v.style.color = '#f9d44f';
+        }
+        kv.appendChild(k);
+        kv.appendChild(v);
+        el.appendChild(kv);
+      }
+    }
+
+    function appendDebugEvent(evt) {
+      var log = document.getElementById('debug-log');
+      var div = document.createElement('div');
+      div.className = 'debug-event';
+
+      var header = document.createElement('div');
+      header.className = 'debug-event-header';
+
+      var ts = document.createElement('span');
+      ts.className = 'debug-ts';
+      var d = new Date(evt.ts);
+      ts.textContent = '[' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds()) + ']';
+
+      var cat = document.createElement('span');
+      cat.className = 'debug-cat ' + evt.category;
+      cat.textContent = evt.category;
+
+      var label = document.createElement('span');
+      label.className = 'debug-label';
+      label.textContent = evt.label;
+
+      header.appendChild(ts);
+      header.appendChild(cat);
+      header.appendChild(label);
+      div.appendChild(header);
+
+      if (evt.detail) {
+        var detail = document.createElement('div');
+        detail.className = 'debug-detail';
+        detail.textContent = evt.detail;
+        div.appendChild(detail);
+      }
+
+      log.appendChild(div);
+
+      // Trim old events.
+      while (log.children.length > DEBUG_MAX_EVENTS) {
+        log.removeChild(log.firstChild);
+      }
+
+      // Auto-scroll to bottom.
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function pad2(n) { return n < 10 ? '0' + n : String(n); }
+
+    // Client-side debug events for worker-layer actions.
+    function addClientDebugEvent(category, label, detail) {
+      appendDebugEvent({ ts: Date.now(), category: category, label: label, detail: detail });
+    }
 
     init();
   </script>

@@ -80,6 +80,17 @@ export const WINNING_LINES: WinLine[] = [
   [0, 4, 8], [2, 4, 6],             // Diagonals
 ];
 
+// ---- Debug / Developer Insights ----
+
+export type DebugEventCategory = 'worker' | 'durable-object' | 'websocket' | 'sandbox' | 'ai' | 'state-machine';
+
+export interface DebugEvent {
+  ts: number;
+  category: DebugEventCategory;
+  label: string;
+  detail?: string;
+}
+
 export const AI_MOVE_DELAY_MS = 250; // Delay before AI places move for natural feel
 export const MAX_CONNECTIONS = 52; // 2 players + 50 spectators
 export const RATE_LIMIT_MAX_TOKENS = 10;

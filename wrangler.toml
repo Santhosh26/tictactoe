@@ -15,6 +15,5 @@ tag = "v1"
 new_sqlite_classes = ["TicTacToe"]
 
 # To enable Dynamic Workers sandbox for move validation (optional, requires paid plan):
-# [[unsafe.bindings]]
-# name = "LOADER"
-# type = "dynamic_worker"
+# [[worker_loaders]]
+# binding = "LOADER"

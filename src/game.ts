@@ -14,6 +14,8 @@ import {
   SocketAttachment,
   IncomingMessage,
   MoveResult,
+  DebugEvent,
+  DebugEventCategory,
   MAX_CONNECTIONS,
   RATE_LIMIT_MAX_TOKENS,
   RATE_LIMIT_REFILL_RATE,
@@ -78,6 +80,7 @@ export class TicTacToe {
   stateLoaded: boolean;
   gameMode: GameMode;
   aiDifficulty: AiDifficulty | null;
+  debugLog: DebugEvent[];
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -100,11 +103,20 @@ export class TicTacToe {
     this.stateLoaded = false;
     this.gameMode = 'multiplayer';
     this.aiDifficulty = null;
+    this.debugLog = [];
+  }
+
+  // Append a transient debug event (flushed in broadcastState, never persisted).
+  private pushDebug(category: DebugEventCategory, label: string, detail?: string): void {
+    this.debugLog.push({ ts: Date.now(), category, label, detail });
   }
 
   // Smart state caching — loads from storage only once per DO wake cycle.
   async ensureState(): Promise<void> {
-    if (this.stateLoaded) return;
+    if (this.stateLoaded) {
+      this.pushDebug('durable-object', 'State cache hit', 'Skipped storage read');
+      return;
+    }
     const stored = await this.state.storage.get<GameState>('gameState');
     if (stored) {
       this.board = stored.board;
@@ -129,9 +141,11 @@ export class TicTacToe {
       this.draws = scoreboard.draws;
     }
     this.stateLoaded = true;
+    this.pushDebug('durable-object', 'State loaded from storage', 'Smart cache: first load this wake cycle');
   }
 
   async saveState(): Promise<void> {
+    this.pushDebug('durable-object', 'State persisted to storage', 'Key: gameState (14 fields)');
     await this.state.storage.put<GameState>('gameState', {
       board: this.board,
       turn: this.turn,
@@ -163,6 +177,7 @@ export class TicTacToe {
     const existing = await this.state.storage.getAlarm();
     if (!existing) {
       await this.state.storage.setAlarm(Date.now() + ALARM_INTERVAL_MS);
+      this.pushDebug('durable-object', 'Alarm scheduled', 'Next in 5 min');
     }
   }
 
@@ -170,14 +185,21 @@ export class TicTacToe {
     await this.ensureState();
 
     // Reconnecting player — restore their original symbol.
-    if (this.playerX === clientId) return 'X';
-    if (this.playerO === clientId) return 'O';
+    if (this.playerX === clientId) {
+      this.pushDebug('websocket', 'Player reconnected: X', 'ClientId: ' + clientId.slice(0, 8) + '...');
+      return 'X';
+    }
+    if (this.playerO === clientId) {
+      this.pushDebug('websocket', 'Player reconnected: O', 'ClientId: ' + clientId.slice(0, 8) + '...');
+      return 'O';
+    }
 
     // New player — claim the first available slot.
     if (this.playerX === null) {
       this.playerX = clientId;
       this.nameX = name;
       await this.saveState();
+      this.pushDebug('websocket', 'Symbol assigned: X', 'Slot claimed (1/2 players)');
       return 'X';
     }
     if (this.playerO === null && this.playerO !== '__AI__') {
@@ -186,11 +208,14 @@ export class TicTacToe {
       // Transition to playing phase when both players are present.
       if (this.phase === 'waiting') {
         this.phase = 'playing';
+        this.pushDebug('state-machine', 'Phase: waiting → playing', 'Both players connected');
       }
       await this.saveState();
+      this.pushDebug('websocket', 'Symbol assigned: O', 'Slot claimed (2/2 players)');
       return 'O';
     }
 
+    this.pushDebug('websocket', 'Spectator joined', 'Room full — observer mode');
     return 'Spectator';
   }
 
@@ -222,11 +247,13 @@ export class TicTacToe {
       this.playerO = '__AI__';
       this.nameO = 'AI (' + difficulty.charAt(0).toUpperCase() + difficulty.slice(1) + ')';
       this.phase = 'playing';
+      this.pushDebug('state-machine', 'Phase: waiting → playing', 'Single-player: AI opponent ready');
       await this.saveState();
     }
 
     this.state.acceptWebSocket(server);
     server.serializeAttachment({ symbol, clientId, name } as SocketAttachment);
+    this.pushDebug('websocket', 'WebSocket accepted', 'Symbol: ' + symbol + ', ClientId: ' + clientId.slice(0, 8) + '...');
 
     await this.ensureState();
     this.lastRoomActivity = Date.now();
@@ -241,10 +268,13 @@ export class TicTacToe {
 
   async webSocketMessage(ws: WebSocket, message: string): Promise<void> {
     // Rate limiting check.
+    const bucket = rateLimitBuckets.get(ws);
     if (!checkRateLimit(ws)) {
+      this.pushDebug('websocket', 'Rate limit: BLOCKED', 'Tokens: ' + (bucket ? bucket.tokens.toFixed(1) : '0') + '/' + RATE_LIMIT_MAX_TOKENS);
       try { ws.send(JSON.stringify({ type: 'rate_limited' })); } catch { /* ignore */ }
       return;
     }
+    this.pushDebug('websocket', 'Rate limit: OK', 'Tokens: ' + (bucket ? bucket.tokens.toFixed(1) : String(RATE_LIMIT_MAX_TOKENS)) + '/' + RATE_LIMIT_MAX_TOKENS);
 
     // Track activity for idle timeout.
     socketActivity.set(ws, Date.now());
@@ -262,6 +292,7 @@ export class TicTacToe {
 
     const attachment = ws.deserializeAttachment() as SocketAttachment;
     const { symbol: playerSymbol, clientId } = attachment;
+    this.pushDebug('websocket', 'Message received', 'type: ' + data.type + (data.index !== undefined ? ', index: ' + data.index : ''));
 
     if (data.type === 'move' && this.phase === 'playing' && !this.winner) {
       const index = data.index;
@@ -276,6 +307,7 @@ export class TicTacToe {
         result = await this.executeInSandbox(this.board, playerSymbol, index, this.turn);
       } catch {
         // Sandbox unavailable — use local fallback.
+        this.pushDebug('sandbox', 'Sandbox error — local fallback', 'Dynamic Worker threw an exception');
         result = validateAndApply(this.board, playerSymbol, index, this.turn);
       }
 
@@ -290,9 +322,16 @@ export class TicTacToe {
           else if (this.winner === 'O') this.winsO++;
           else if (this.winner === 'Draw') this.draws++;
           await this.saveScoreboard();
+          if (this.winner === 'Draw') {
+            this.pushDebug('state-machine', 'Draw', 'Board full — no winner');
+          } else {
+            this.pushDebug('state-machine', 'Winner: ' + this.winner, 'Win line: [' + (this.winLine || []).join(', ') + ']');
+          }
         } else {
           // Switch turns.
+          const prev = this.turn;
           this.turn = this.turn === 'X' ? 'O' : 'X';
+          this.pushDebug('state-machine', 'Turn: ' + prev + ' → ' + this.turn);
         }
 
         await this.saveState();
@@ -325,6 +364,7 @@ export class TicTacToe {
         this.winLine = null;
         this.phase = 'playing';
         this.resetRequestedBy = null;
+        this.pushDebug('state-machine', 'Game reset (immediate)', 'Single-player mode — next starter: ' + this.turn);
         await this.saveState();
         this.broadcastState();
 
@@ -339,6 +379,7 @@ export class TicTacToe {
       if (this.resetRequestedBy === null) {
         // First player requests reset.
         this.resetRequestedBy = clientId;
+        this.pushDebug('state-machine', 'Reset requested by ' + playerSymbol, 'Waiting for opponent');
         await this.saveState();
         this.broadcastState();
       } else if (this.resetRequestedBy !== clientId) {
@@ -355,6 +396,7 @@ export class TicTacToe {
         this.winLine = null;
         this.phase = 'playing';
         this.resetRequestedBy = null;
+        this.pushDebug('state-machine', 'Reset agreed — new game', 'Next starter: ' + this.turn);
         await this.saveState();
         this.broadcastState();
       }
@@ -364,9 +406,14 @@ export class TicTacToe {
 
   // Execute AI move with a brief delay for natural feel.
   private async executeAiMove(): Promise<void> {
+    const diff = this.aiDifficulty ?? 'hard';
+    this.pushDebug('ai', 'AI computing move', 'Difficulty: ' + diff + (diff === 'hard' ? ', minimax + alpha-beta' : diff === 'medium' ? ', 50% minimax / 50% random' : ', random'));
+    const t0 = Date.now();
     await new Promise<void>(resolve => setTimeout(resolve, AI_MOVE_DELAY_MS));
 
-    const aiIndex = computeAiMove(this.board, 'O', this.aiDifficulty ?? 'hard');
+    const aiIndex = computeAiMove(this.board, 'O', diff);
+    const elapsed = Date.now() - t0;
+    this.pushDebug('ai', 'AI chose cell ' + aiIndex, 'Computed in ' + elapsed + 'ms');
     const result = validateAndApply(this.board, 'O', aiIndex, this.turn);
 
     if (result.valid) {
@@ -380,8 +427,14 @@ export class TicTacToe {
         else if (this.winner === 'O') this.winsO++;
         else if (this.winner === 'Draw') this.draws++;
         await this.saveScoreboard();
+        if (this.winner === 'Draw') {
+          this.pushDebug('state-machine', 'Draw', 'Board full — no winner');
+        } else {
+          this.pushDebug('state-machine', 'Winner: ' + this.winner, 'Win line: [' + (this.winLine || []).join(', ') + ']');
+        }
       } else {
         this.turn = 'X';
+        this.pushDebug('state-machine', 'Turn: O → X');
       }
 
       await this.saveState();
@@ -498,7 +551,10 @@ export class TicTacToe {
       draws: this.draws,
       gameMode: this.gameMode,
       aiDifficulty: this.aiDifficulty,
+      debug: this.debugLog,
     });
+    // Flush debug events after serialization.
+    this.debugLog = [];
     for (const ws of activeSockets) {
       try {
         ws.send(stateMessage);
@@ -519,9 +575,11 @@ export class TicTacToe {
   ): Promise<MoveResult> {
     // Check if LOADER binding exists (Dynamic Workers API).
     if (!this.env.LOADER) {
+      this.pushDebug('sandbox', 'Move validated (local)', 'LOADER not available — local fallback');
       return validateAndApply(board, playerSymbol, moveIndex, turn);
     }
 
+    this.pushDebug('sandbox', 'Move validated (Dynamic Worker)', 'Isolated V8, globalOutbound: null');
     const worker = await this.env.LOADER.load({
       mainModule: 'rules.js',
       modules: {

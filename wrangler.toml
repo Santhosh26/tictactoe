@@ -11,5 +11,5 @@ tag = "v1"
 new_sqlite_classes = ["TicTacToe"]
 
 routes = [
-  { pattern = "tictactoe.ksanthoshkumar.com/*", custom_domain = true }
+  { pattern = "tictactoe.ksanthoshkumar.com/*", zone_name = "ksanthoshkumar.com" }
 ]

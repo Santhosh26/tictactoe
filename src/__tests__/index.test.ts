@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { exports } from 'cloudflare:workers';
 
-const worker = exports.default;
+const worker = (exports as Cloudflare.Exports & { default: Fetcher }).default;
 
 // ---- Helpers ----
 

@@ -882,9 +882,14 @@ export const HTML_TEMPLATE = `
       ws = new WebSocket(url);
 
       ws.onopen = function() {
+        const wasReconnect = reconnectAttempts > 0;
         reconnectAttempts = 0;
-        addClientDebugEvent('worker', 'WebSocket connected', 'Route: /ws, Room: ' + room);
-        addClientDebugEvent('worker', 'Security headers applied', 'CSP, X-Frame-Options, X-Content-Type-Options');
+        if (wasReconnect) {
+          addClientDebugEvent('worker', 'Reconnected to game room', 'Room: ' + room + ' - Durable Object restored your active session');
+        } else {
+          addClientDebugEvent('worker', 'Connected to game room', 'Room: ' + room + ' - Cloudflare Worker routed WebSocket to Durable Object');
+        }
+        addClientDebugEvent('worker', 'Response secured by Cloudflare Worker', 'CSP blocks XSS; X-Frame-Options blocks clickjacking; X-Content-Type-Options prevents MIME sniffing');
         if (currentMode === 'singleplayer') {
           setStatus('Starting game...', 'waiting');
         } else {

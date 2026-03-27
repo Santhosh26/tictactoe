@@ -114,7 +114,7 @@ export class TicTacToe {
   // Smart state caching — loads from storage only once per DO wake cycle.
   async ensureState(): Promise<void> {
     if (this.stateLoaded) {
-      this.pushDebug('durable-object', 'State cache hit', 'Skipped storage read');
+      this.pushDebug('durable-object', 'State already in memory - skipped storage read', 'DO is still awake: in-memory cache avoids a storage round-trip');
       return;
     }
     const stored = await this.state.storage.get<GameState>('gameState');
@@ -141,11 +141,11 @@ export class TicTacToe {
       this.draws = scoreboard.draws;
     }
     this.stateLoaded = true;
-    this.pushDebug('durable-object', 'State loaded from storage', 'Smart cache: first load this wake cycle');
+    this.pushDebug('durable-object', 'DO woke up - loading game state', 'First request this wake cycle: reading persistent storage');
   }
 
   async saveState(): Promise<void> {
-    this.pushDebug('durable-object', 'State persisted to storage', 'Key: gameState (14 fields)');
+    this.pushDebug('durable-object', 'Game state saved to Durable Object storage', 'Key: gameState (14 fields)');
     await this.state.storage.put<GameState>('gameState', {
       board: this.board,
       turn: this.turn,
@@ -177,7 +177,7 @@ export class TicTacToe {
     const existing = await this.state.storage.getAlarm();
     if (!existing) {
       await this.state.storage.setAlarm(Date.now() + ALARM_INTERVAL_MS);
-      this.pushDebug('durable-object', 'Alarm scheduled', 'Next in 5 min');
+      this.pushDebug('durable-object', 'Cleanup alarm scheduled', 'DO Alarms API will wake this object in 5 min');
     }
   }
 
@@ -186,11 +186,11 @@ export class TicTacToe {
 
     // Reconnecting player — restore their original symbol.
     if (this.playerX === clientId) {
-      this.pushDebug('websocket', 'Player reconnected: X', 'ClientId: ' + clientId.slice(0, 8) + '...');
+      this.pushDebug('websocket', 'Player X reconnected', 'DO matched stored clientId - session restored');
       return 'X';
     }
     if (this.playerO === clientId) {
-      this.pushDebug('websocket', 'Player reconnected: O', 'ClientId: ' + clientId.slice(0, 8) + '...');
+      this.pushDebug('websocket', 'Player O reconnected', 'DO matched stored clientId - session restored');
       return 'O';
     }
 
@@ -199,7 +199,7 @@ export class TicTacToe {
       this.playerX = clientId;
       this.nameX = name;
       await this.saveState();
-      this.pushDebug('websocket', 'Symbol assigned: X', 'Slot claimed (1/2 players)');
+      this.pushDebug('websocket', 'Player 1 joined as X', 'DO reserved slot 1/2 - waiting for second player');
       return 'X';
     }
     if (this.playerO === null && this.playerO !== '__AI__') {
@@ -208,14 +208,14 @@ export class TicTacToe {
       // Transition to playing phase when both players are present.
       if (this.phase === 'waiting') {
         this.phase = 'playing';
-        this.pushDebug('state-machine', 'Phase: waiting → playing', 'Both players connected');
+        this.pushDebug('state-machine', 'Game started - both players ready', 'DO state machine: waiting -> playing');
       }
       await this.saveState();
-      this.pushDebug('websocket', 'Symbol assigned: O', 'Slot claimed (2/2 players)');
+      this.pushDebug('websocket', 'Player 2 joined as O', 'Both slots filled - game can start');
       return 'O';
     }
 
-    this.pushDebug('websocket', 'Spectator joined', 'Room full — observer mode');
+    this.pushDebug('websocket', 'Spectator connected (room full)', 'Max 2 players per room - this connection is observer mode');
     return 'Spectator';
   }
 
@@ -231,10 +231,15 @@ export class TicTacToe {
     }
 
     const url = new URL(request.url);
+    const roomCode = (url.searchParams.get('room') ?? 'UNKNOWN').toUpperCase();
     const clientId = url.searchParams.get('clientId') ?? crypto.randomUUID();
     const name = (url.searchParams.get('name') ?? '').trim().slice(0, 20) || 'Player';
     const mode = (url.searchParams.get('mode') ?? 'multiplayer') as GameMode;
     const difficulty = (url.searchParams.get('difficulty') ?? 'hard') as AiDifficulty;
+
+    if (currentSockets.length === 0) {
+      this.pushDebug('durable-object', 'Game room created', 'Room: ' + roomCode + ' - Cloudflare Worker routed request to Durable Object');
+    }
 
     const { 0: client, 1: server } = new WebSocketPair();
 
@@ -247,13 +252,13 @@ export class TicTacToe {
       this.playerO = '__AI__';
       this.nameO = 'AI (' + difficulty.charAt(0).toUpperCase() + difficulty.slice(1) + ')';
       this.phase = 'playing';
-      this.pushDebug('state-machine', 'Phase: waiting → playing', 'Single-player: AI opponent ready');
+      this.pushDebug('state-machine', 'Game started - AI opponent ready', 'Single-player mode: AI holds the O slot');
       await this.saveState();
     }
 
     this.state.acceptWebSocket(server);
     server.serializeAttachment({ symbol, clientId, name } as SocketAttachment);
-    this.pushDebug('websocket', 'WebSocket accepted', 'Symbol: ' + symbol + ', ClientId: ' + clientId.slice(0, 8) + '...');
+    this.pushDebug('websocket', 'WebSocket hibernated into Durable Object', 'Symbol: ' + symbol + ' - connection can sleep while idle');
 
     await this.ensureState();
     this.lastRoomActivity = Date.now();
@@ -268,13 +273,16 @@ export class TicTacToe {
 
   async webSocketMessage(ws: WebSocket, message: string): Promise<void> {
     // Rate limiting check.
+    const allowed = checkRateLimit(ws);
     const bucket = rateLimitBuckets.get(ws);
-    if (!checkRateLimit(ws)) {
-      this.pushDebug('websocket', 'Rate limit: BLOCKED', 'Tokens: ' + (bucket ? bucket.tokens.toFixed(1) : '0') + '/' + RATE_LIMIT_MAX_TOKENS);
+    if (!allowed) {
+      this.pushDebug('websocket', 'Move blocked - rate limit exceeded', 'Token bucket empty: ' + (bucket ? bucket.tokens.toFixed(1) : '0') + '/' + RATE_LIMIT_MAX_TOKENS);
       try { ws.send(JSON.stringify({ type: 'rate_limited' })); } catch { /* ignore */ }
       return;
     }
-    this.pushDebug('websocket', 'Rate limit: OK', 'Tokens: ' + (bucket ? bucket.tokens.toFixed(1) : String(RATE_LIMIT_MAX_TOKENS)) + '/' + RATE_LIMIT_MAX_TOKENS);
+    if (bucket && bucket.tokens < 5) {
+      this.pushDebug('websocket', 'Rate limit warning - tokens running low', 'Token bucket: ' + bucket.tokens.toFixed(1) + '/' + RATE_LIMIT_MAX_TOKENS + ' (refills over time)');
+    }
 
     // Track activity for idle timeout.
     socketActivity.set(ws, Date.now());
@@ -292,7 +300,7 @@ export class TicTacToe {
 
     const attachment = ws.deserializeAttachment() as SocketAttachment;
     const { symbol: playerSymbol, clientId } = attachment;
-    this.pushDebug('websocket', 'Message received', 'type: ' + data.type + (data.index !== undefined ? ', index: ' + data.index : ''));
+    this.pushDebug('websocket', 'Player message received', 'type: ' + data.type + (data.index !== undefined ? ', cell: ' + data.index : ''));
 
     if (data.type === 'move' && this.phase === 'playing' && !this.winner) {
       const index = data.index;
@@ -307,7 +315,7 @@ export class TicTacToe {
         result = await this.executeInSandbox(this.board, playerSymbol, index, this.turn);
       } catch {
         // Sandbox unavailable — use local fallback.
-        this.pushDebug('sandbox', 'Sandbox error — local fallback', 'Dynamic Worker threw an exception');
+        this.pushDebug('sandbox', 'Sandbox error - using local validation fallback', 'Dynamic Worker isolate threw an exception');
         result = validateAndApply(this.board, playerSymbol, index, this.turn);
       }
 
@@ -323,15 +331,15 @@ export class TicTacToe {
           else if (this.winner === 'Draw') this.draws++;
           await this.saveScoreboard();
           if (this.winner === 'Draw') {
-            this.pushDebug('state-machine', 'Draw', 'Board full — no winner');
+            this.pushDebug('state-machine', 'Game over - draw', 'Board full with no winner; scoreboard updated');
           } else {
-            this.pushDebug('state-machine', 'Winner: ' + this.winner, 'Win line: [' + (this.winLine || []).join(', ') + ']');
+            this.pushDebug('state-machine', 'Game over - ' + this.winner + ' wins', 'Winning line: [' + (this.winLine || []).join(', ') + ']; scoreboard updated');
           }
         } else {
           // Switch turns.
           const prev = this.turn;
           this.turn = this.turn === 'X' ? 'O' : 'X';
-          this.pushDebug('state-machine', 'Turn: ' + prev + ' → ' + this.turn);
+          this.pushDebug('state-machine', 'Turn advanced: ' + prev + ' -> ' + this.turn, 'DO broadcasting updated state to connected clients');
         }
 
         await this.saveState();
@@ -364,7 +372,7 @@ export class TicTacToe {
         this.winLine = null;
         this.phase = 'playing';
         this.resetRequestedBy = null;
-        this.pushDebug('state-machine', 'Game reset (immediate)', 'Single-player mode — next starter: ' + this.turn);
+        this.pushDebug('state-machine', 'New game started - board cleared', 'Single-player reset: no opponent confirmation needed; next starter: ' + this.turn);
         await this.saveState();
         this.broadcastState();
 
@@ -379,7 +387,7 @@ export class TicTacToe {
       if (this.resetRequestedBy === null) {
         // First player requests reset.
         this.resetRequestedBy = clientId;
-        this.pushDebug('state-machine', 'Reset requested by ' + playerSymbol, 'Waiting for opponent');
+        this.pushDebug('state-machine', 'Player ' + playerSymbol + ' requested rematch', 'Multiplayer reset requires confirmation from both players');
         await this.saveState();
         this.broadcastState();
       } else if (this.resetRequestedBy !== clientId) {
@@ -396,7 +404,7 @@ export class TicTacToe {
         this.winLine = null;
         this.phase = 'playing';
         this.resetRequestedBy = null;
-        this.pushDebug('state-machine', 'Reset agreed — new game', 'Next starter: ' + this.turn);
+        this.pushDebug('state-machine', 'Rematch confirmed - new game started', 'Both players agreed; next starter: ' + this.turn);
         await this.saveState();
         this.broadcastState();
       }
@@ -407,13 +415,13 @@ export class TicTacToe {
   // Execute AI move with a brief delay for natural feel.
   private async executeAiMove(): Promise<void> {
     const diff = this.aiDifficulty ?? 'hard';
-    this.pushDebug('ai', 'AI computing move', 'Difficulty: ' + diff + (diff === 'hard' ? ', minimax + alpha-beta' : diff === 'medium' ? ', 50% minimax / 50% random' : ', random'));
+    this.pushDebug('ai', 'AI is thinking', 'Difficulty: ' + diff + (diff === 'hard' ? ' (minimax + alpha-beta pruning)' : diff === 'medium' ? ' (50% minimax / 50% random)' : ' (random)'));
     const t0 = Date.now();
     await new Promise<void>(resolve => setTimeout(resolve, AI_MOVE_DELAY_MS));
 
     const aiIndex = computeAiMove(this.board, 'O', diff);
     const elapsed = Date.now() - t0;
-    this.pushDebug('ai', 'AI chose cell ' + aiIndex, 'Computed in ' + elapsed + 'ms');
+    this.pushDebug('ai', 'AI played cell ' + aiIndex, 'Decision time: ' + elapsed + 'ms (includes natural delay)');
     const result = validateAndApply(this.board, 'O', aiIndex, this.turn);
 
     if (result.valid) {
@@ -428,13 +436,13 @@ export class TicTacToe {
         else if (this.winner === 'Draw') this.draws++;
         await this.saveScoreboard();
         if (this.winner === 'Draw') {
-          this.pushDebug('state-machine', 'Draw', 'Board full — no winner');
+          this.pushDebug('state-machine', 'Game over - draw', 'Board full with no winner; scoreboard updated');
         } else {
-          this.pushDebug('state-machine', 'Winner: ' + this.winner, 'Win line: [' + (this.winLine || []).join(', ') + ']');
+          this.pushDebug('state-machine', 'Game over - ' + this.winner + ' wins', 'Winning line: [' + (this.winLine || []).join(', ') + ']; scoreboard updated');
         }
       } else {
         this.turn = 'X';
-        this.pushDebug('state-machine', 'Turn: O → X');
+        this.pushDebug('state-machine', 'Turn advanced: O -> X', 'DO broadcasting updated state to connected clients');
       }
 
       await this.saveState();
@@ -575,11 +583,11 @@ export class TicTacToe {
   ): Promise<MoveResult> {
     // Check if LOADER binding exists (Dynamic Workers API).
     if (!this.env.LOADER) {
-      this.pushDebug('sandbox', 'Move validated (local)', 'LOADER not available — local fallback');
+      this.pushDebug('sandbox', 'Move validated in Worker process', 'Dynamic Workers LOADER unavailable - using local fallback');
       return validateAndApply(board, playerSymbol, moveIndex, turn);
     }
 
-    this.pushDebug('sandbox', 'Move validated (Dynamic Worker)', 'Isolated V8, globalOutbound: null');
+    this.pushDebug('sandbox', 'Move validated in isolated Dynamic Worker', 'Separate V8 isolate with globalOutbound: null (no network)');
     const worker = await this.env.LOADER.load({
       mainModule: 'rules.js',
       modules: {

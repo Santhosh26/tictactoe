@@ -9,6 +9,10 @@ import type { TicTacToe } from '../game';
 
 // ---- Helpers ----
 
+type TestEnv = Cloudflare.Env & {
+  GAME_ROOM: DurableObjectNamespace;
+};
+
 function makeUpgradeRequest(
   room: string,
   clientId: string,
@@ -22,9 +26,10 @@ function makeUpgradeRequest(
   );
 }
 
-function getStub(room: string = 'TEST01'): DurableObjectStub<TicTacToe> {
-  const id = env.GAME_ROOM.idFromName(room);
-  return env.GAME_ROOM.get(id) as DurableObjectStub<TicTacToe>;
+function getStub(room: string = 'TEST01'): DurableObjectStub {
+  const testEnv = env as TestEnv;
+  const id = testEnv.GAME_ROOM.idFromName(room);
+  return testEnv.GAME_ROOM.get(id);
 }
 
 interface WSPair {
@@ -34,7 +39,7 @@ interface WSPair {
 }
 
 async function connectPlayer(
-  stub: DurableObjectStub<TicTacToe>,
+  stub: DurableObjectStub,
   clientId: string,
   name: string,
   mode: string = 'multiplayer',
@@ -396,11 +401,12 @@ describe('TicTacToe Durable Object', () => {
 
       // Play until game is finished by making AI-beatable moves
       // We'll manipulate via the DO directly
-      await runInDurableObject(stub, async (instance: TicTacToe) => {
-        instance.phase = 'finished';
-        instance.winner = 'X';
-        await instance.saveState();
-        instance.broadcastState();
+      await runInDurableObject(stub, async (instance) => {
+        const game = instance as unknown as TicTacToe;
+        game.phase = 'finished';
+        game.winner = 'X';
+        await game.saveState();
+        game.broadcastState();
       });
       await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -482,10 +488,11 @@ describe('TicTacToe Durable Object', () => {
       await new Promise(resolve => setTimeout(resolve, 50));
 
       // Verify the state is correct
-      await runInDurableObject(stub, async (instance: TicTacToe) => {
-        await instance.ensureState();
-        expect(instance.gameMode).toBe('singleplayer');
-        expect(instance.aiDifficulty).toBe('medium');
+      await runInDurableObject(stub, async (instance) => {
+        const game = instance as unknown as TicTacToe;
+        await game.ensureState();
+        expect(game.gameMode).toBe('singleplayer');
+        expect(game.aiDifficulty).toBe('medium');
       });
 
       ws.close(1000);

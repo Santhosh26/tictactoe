@@ -583,6 +583,23 @@ export const HTML_TEMPLATE = `
         max-height: 150px;
       }
     }
+
+    /* Small phones (< 400px) */
+    @media (max-width: 400px) {
+      h1 { font-size: 1.6rem; }
+      #board {
+        grid-template-columns: repeat(3, 85px);
+        gap: 5px;
+      }
+      .cell {
+        width: 85px;
+        height: 85px;
+        font-size: 2.4rem;
+      }
+      #players-row { max-width: 280px; }
+      .card-symbol { font-size: 1.5rem; }
+      .card-name { font-size: 0.8rem; max-width: 90px; }
+    }
   </style>
 </head>
 <body>
@@ -816,6 +833,7 @@ export const HTML_TEMPLATE = `
       debugStorageReads = 0;
       debugStorageWrites = 0;
       debugSandboxMode = 'Unknown';
+      debugEdgeColo = '';
       document.getElementById('debug-log').innerHTML = '';
       window.history.pushState({}, '', '/');
       showLobby();
@@ -902,6 +920,10 @@ export const HTML_TEMPLATE = `
 
         if (data.type === 'init') {
           mySymbol = data.symbol;
+          if (data.colo) debugEdgeColo = data.colo;
+          if (data.symbol === 'Spectator') {
+            addClientDebugEvent('websocket', 'Joined as spectator', 'Room full (2 players) — observing in read-only mode');
+          }
         }
 
         if (data.type === 'state') {
@@ -1325,6 +1347,7 @@ export const HTML_TEMPLATE = `
     let debugStorageReads = 0;
     let debugStorageWrites = 0;
     let debugSandboxMode = 'Unknown';
+    let debugEdgeColo = '';
     const DEBUG_MAX_EVENTS = 100;
 
     function toggleDebugPanel() {
@@ -1368,6 +1391,7 @@ export const HTML_TEMPLATE = `
       var el = document.getElementById('debug-do-info');
       el.innerHTML = '';
       var items = [
+        ['Edge Location', debugEdgeColo || 'Local'],
         ['Game Mode', data.gameMode === 'singleplayer' ? 'Single (' + (data.aiDifficulty || 'hard') + ')' : 'Multiplayer'],
         ['Phase', data.phase],
         ['Connections', String(data.playersCount || 0) + (data.gameMode === 'singleplayer' ? ' + AI' : '')],

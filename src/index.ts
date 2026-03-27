@@ -55,6 +55,19 @@ export default {
 
       const roomId = env.GAME_ROOM.idFromName(room);
       const roomObject = env.GAME_ROOM.get(roomId);
+
+      // Forward edge colo to the Durable Object via a header.
+      const colo = (request.cf as Record<string, unknown> | undefined)?.colo as string | undefined;
+      if (colo) {
+        const headers = new Headers(request.headers);
+        headers.set('X-CF-Colo', colo);
+        const forwarded = new Request(request.url, {
+          method: request.method,
+          headers,
+          body: request.body,
+        });
+        return roomObject.fetch(forwarded);
+      }
       return roomObject.fetch(request);
     }
 

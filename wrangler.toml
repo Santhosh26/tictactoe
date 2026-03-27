@@ -20,5 +20,5 @@ new_sqlite_classes = ["TicTacToe"]
 
 [observability]
 [observability.logs]
-enabled = false
+enabled = true
 invocation_logs = true

@@ -74,10 +74,14 @@ async function runLoadTest() {
   }
 }
 
-function generateRoomCode(index: number): string {
-  // Ensure exactly 6 alphanumeric characters
-  const padded = index.toString().padStart(4, '0');
-  return `RM${padded}`;
+function generateRoomCode(_index: number): string {
+  // Use random room codes to avoid collisions with stale rooms from previous runs
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return code;
 }
 
 function printMetrics() {

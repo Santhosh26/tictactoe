@@ -18,10 +18,9 @@
     "@types/ws": "^8.18.1",
     "typescript": "^6.0.2",
     "vitest": "^4.1.1",
-    "wrangler": "^4.77.0"
-  },
-  "dependencies": {
     "uuid": "^13.0.0",
+    "wrangler": "^4.77.0",
     "ws": "^8.20.0"
-  }
+  },
+  "dependencies": {}
 }

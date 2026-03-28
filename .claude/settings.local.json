@@ -3,7 +3,9 @@
     "allow": [
       "WebFetch(domain:blog.cloudflare.com)",
       "mcp__claude_ai_Cloudflare_Developer_Platform__accounts_list",
-      "mcp__claude_ai_Cloudflare_Developer_Platform__workers_list"
+      "mcp__claude_ai_Cloudflare_Developer_Platform__workers_list",
+      "mcp__plugin_playwright_playwright__browser_navigate",
+      "mcp__plugin_playwright_playwright__browser_fill_form"
     ]
   }
 }

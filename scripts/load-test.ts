@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 const HOST = 'tictactoe.ksanthoshkumar.com';
 const PROTOCOL = 'wss'; // Set to wss for production
-const NUM_PAIRS = 100;
+const NUM_PAIRS = 500;
 const MOVE_DELAY_MS = 600; // 600ms to avoid rate limiting (refill is 2/sec)
 
 // Metrics

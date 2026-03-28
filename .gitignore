@@ -28,3 +28,6 @@ Thumbs.db
 *.sln
 package-lock.json
 .claude/settings.local.json
+
+# Presentation materials (not part of the app)
+PRESENTATION.md

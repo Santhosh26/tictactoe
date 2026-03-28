@@ -75,8 +75,8 @@ See **AGENTS.md** for detailed conventions on types, async/await, frontend patte
 - `src/types.ts` — All shared types, constants, and `DebugEvent`
 - `src/frontend.ts` — HTML/CSS/JS frontend template with Developer Insights panel
 - `src/__tests__/sandbox.test.ts` — Unit tests for game rules + AI engine (26 tests)
-- `src/__tests__/game.test.ts` — Integration tests for Durable Object (15 tests)
-- `src/__tests__/index.test.ts` — Router & validation tests (22 tests)
+- `src/__tests__/game.test.ts` — Integration tests for Durable Object (16 tests)
+- `src/__tests__/index.test.ts` — Router & validation tests (21 tests)
 - `vitest.config.mts` — Vitest config (cloudflareTest plugin + cloudflarePool)
 - `wrangler.toml` — Cloudflare Workers config; defines `GAME_ROOM` binding
 - `AGENTS.md` — Comprehensive coding guidelines, naming conventions, and project standards

@@ -14,10 +14,6 @@ class_name = "TicTacToe"
 tag = "v1"
 new_sqlite_classes = ["TicTacToe"]
 
-# To enable Dynamic Workers sandbox for move validation (optional, requires paid plan):
-# [[worker_loaders]]
-# binding = "LOADER"
-
 [observability]
 [observability.logs]
 enabled = true

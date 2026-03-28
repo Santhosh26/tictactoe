@@ -8,14 +8,14 @@ this repository. It is intended for AI coding agents and human contributors.
 ## Project Overview
 
 A real-time **multiplayer & single-player Tic-Tac-Toe game** deployed as a **Cloudflare Worker**,
-showcasing Durable Objects, WebSockets, Dynamic Workers sandboxing, and an AI engine with
+showcasing Durable Objects, WebSockets, and an AI engine with
 a real-time Developer Insights panel for observing Cloudflare internals.
 
 | Attribute        | Value                                                          |
 |------------------|----------------------------------------------------------------|
 | Language         | TypeScript 6                                                   |
 | Runtime          | Cloudflare Workers (edge, not Node.js)                         |
-| Key primitives   | Durable Objects + WebSockets + Dynamic Workers (optional)      |
+| Key primitives   | Durable Objects + WebSockets                                   |
 | Entry point      | `src/index.ts` (router); `src/game.ts` (DO)                   |
 | Build tool       | Wrangler 4 (uses esbuild internally)                           |
 | Module format    | `"type": "commonjs"` in package.json                           |
@@ -87,7 +87,7 @@ npx vitest run --reporter=verbose -t "test name here"
 tictactoe/
 ├── src/
 │   ├── index.ts              # Worker router (~50 lines): CSP headers, Origin check, re-exports
-│   ├── game.ts               # TicTacToe Durable Object: state machine, WS, rate limiting, sandbox, debug events
+│   ├── game.ts               # TicTacToe Durable Object: state machine, WS, rate limiting, debug events
 │   ├── sandbox.ts            # Game rules + AI engine (minimax with alpha-beta pruning)
 │   ├── types.ts              # Shared interfaces, types, constants, DebugEvent
 │   ├── frontend.ts           # HTML_TEMPLATE: game UI, lobby, AI mode, Developer Insights panel
@@ -158,7 +158,7 @@ Each source file has a banner comment at the top using `// ===` style:
 ```
 
 - `src/index.ts` — Worker router + security headers + re-exports
-- `src/game.ts` — Durable Object (state machine, WebSocket handlers, alarms, sandbox, debug instrumentation)
+- `src/game.ts` — Durable Object (state machine, WebSocket handlers, alarms, debug instrumentation)
 - `src/sandbox.ts` — Game rules + AI engine (minimax with alpha-beta, 3 difficulty levels)
 - `src/types.ts` — Shared interfaces, types, constants, and DebugEvent
 - `src/frontend.ts` — HTML template (XSS-safe, auto-reconnect, mutual reset, AI mode, Developer Insights panel)
@@ -238,7 +238,7 @@ Key implementation details:
 ## Developer Insights Panel
 
 A real-time side panel that shows Cloudflare internals as the game is played,
-designed to educate audiences about Durable Objects, Workers, and Dynamic Workers.
+designed to educate audiences about Durable Objects and Workers.
 
 ### Architecture
 
@@ -253,7 +253,7 @@ designed to educate audiences about Durable Objects, Workers, and Dynamic Worker
 ### DebugEvent Type
 
 ```typescript
-type DebugEventCategory = 'worker' | 'durable-object' | 'websocket' | 'sandbox' | 'ai' | 'state-machine';
+type DebugEventCategory = 'worker' | 'durable-object' | 'websocket' | 'ai' | 'state-machine';
 
 interface DebugEvent {
   ts: number;           // Date.now() timestamp
@@ -281,7 +281,6 @@ and rendered in the frontend panel.
 | `worker`         | Purple  |
 | `durable-object` | Blue    |
 | `websocket`      | Green   |
-| `sandbox`        | Yellow  |
 | `ai`             | Orange  |
 | `state-machine`  | Pink    |
 
@@ -292,52 +291,12 @@ and rendered in the frontend panel.
 
 ---
 
-## Dynamic Workers (LOADER)
-
-Dynamic Workers allow running game rules in an isolated V8 sandbox with no
-network access, preventing cheating via code injection.
-
-### wrangler.toml Configuration
-
-```toml
-# Uncomment to enable (requires paid plan):
-# [[worker_loaders]]
-# binding = "LOADER"
-```
-
-### How It Works
-
-1. `executeInSandbox()` in `src/game.ts` checks if `env.LOADER` exists
-2. If available: calls `env.LOADER.load()` with the game rules as a string module,
-   `globalOutbound: null` (blocks all network access)
-3. If unavailable: falls back to local `validateAndApply()` function
-4. The `GAME_RULES_MODULE` string in `src/sandbox.ts` contains a self-contained
-   copy of the validation logic (must maintain its own `WINNING_LINES` since
-   it runs in an isolated context)
-
-### Typing
-
-The `DynamicWorkerLoader` interface in `src/types.ts` types the LOADER binding:
-
-```typescript
-interface DynamicWorkerLoader {
-  load(config: {
-    mainModule: string;
-    modules: Record<string, string>;
-    globalOutbound: null;
-  }): Promise<{ getEntrypoint(): { validateAndApply(...): MoveResult } }>;
-}
-```
-
----
-
 ## wrangler.toml Conventions
 
 - Worker name: `tic-tac-toe-do`
 - Durable Object binding name: `GAME_ROOM` → class `TicTacToe`
 - New Durable Object classes must be added to `[[durable_objects.bindings]]`
   and a corresponding `[[migrations]]` entry with a new unique `tag`.
-- Dynamic Workers binding uses `[[worker_loaders]]` with `binding = "LOADER"`.
 
 ---
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Quick Summary
 
-**Real-time multiplayer & single-player Tic-Tac-Toe game** with AI opponents, deployed as a Cloudflare Worker using Durable Objects, WebSockets, and optional Dynamic Workers sandboxing. Features a real-time Developer Insights panel showing Cloudflare internals. Multi-file TypeScript application with sandboxed game logic, rate limiting, and a game state machine. See **AGENTS.md** for comprehensive conventions, code style, and detailed guidelines.
+**Real-time multiplayer & single-player Tic-Tac-Toe game** with AI opponents, deployed as a Cloudflare Worker using Durable Objects and WebSockets. Features a real-time Developer Insights panel showing Cloudflare internals. Multi-file TypeScript application with game logic, rate limiting, and a game state machine. See **AGENTS.md** for comprehensive conventions, code style, and detailed guidelines.
 
 ## Essential Commands
 
@@ -30,8 +30,8 @@ npm run test:watch
 The application is split across five source files:
 
 1. **`src/index.ts`** — Worker router (~50 lines): CSP/security headers, Origin validation, mode/difficulty validation, re-exports DO
-2. **`src/game.ts`** — TicTacToe Durable Object: state machine, WebSocket handlers, rate limiting, idle/TTL alarms, sandbox integration, AI move execution, debug event instrumentation
-3. **`src/sandbox.ts`** — Game rules + AI engine: local `validateAndApply()`, `computeAiMove()` (minimax with alpha-beta pruning, 3 difficulty levels), string module for Dynamic Worker isolates
+2. **`src/game.ts`** — TicTacToe Durable Object: state machine, WebSocket handlers, rate limiting, idle/TTL alarms, AI move execution, debug event instrumentation
+3. **`src/sandbox.ts`** — Game rules + AI engine: `validateAndApply()`, `computeAiMove()` (minimax with alpha-beta pruning, 3 difficulty levels)
 4. **`src/types.ts`** — Shared interfaces (`Env`, `GameState`, `MoveResult`, `DebugEvent`), types, and constants
 5. **`src/frontend.ts`** — `HTML_TEMPLATE` export with lobby, mode selection, XSS-safe DOM methods, auto-reconnection, mutual reset protocol, Developer Insights panel
 
@@ -41,10 +41,9 @@ The application is split across five source files:
 - **State machine** (`waiting` → `playing` → `finished`) gates moves and resets
 - **AI engine** (minimax with alpha-beta pruning, 3 difficulty levels: easy/medium/hard)
 - **Rate limiting** (token bucket per socket: 10 tokens, refills 2/sec)
-- **Dynamic Workers sandbox** (optional) — game rules run in isolated V8 with no network access via `[[worker_loaders]]` binding
 - **Alarms** — idle socket cleanup (30 min) and room TTL cleanup (24h)
 - **Mutual reset** — both players must agree to play again (multiplayer); immediate reset (single-player)
-- **Developer Insights panel** — real-time side panel showing Cloudflare internals (DO state, events, sandbox mode)
+- **Developer Insights panel** — real-time side panel showing Cloudflare internals (DO state, events)
 
 ## Code Style & Conventions
 
@@ -56,7 +55,7 @@ The application is split across five source files:
 - **Error handling:** Return `Response` objects with appropriate HTTP status codes; `try/catch` only where failure is expected (JSON parse, ws.send)
 - **Frontend JS:** Use `let`/`const` (no `var`), `textContent` (never `innerHTML` for user data)
 
-See **AGENTS.md** for detailed conventions on types, async/await, frontend patterns, Dynamic Workers, and the debug panel.
+See **AGENTS.md** for detailed conventions on types, async/await, frontend patterns, and the debug panel.
 
 ## Development Notes
 
@@ -79,7 +78,7 @@ See **AGENTS.md** for detailed conventions on types, async/await, frontend patte
 - `src/__tests__/game.test.ts` — Integration tests for Durable Object (15 tests)
 - `src/__tests__/index.test.ts` — Router & validation tests (22 tests)
 - `vitest.config.mts` — Vitest config (cloudflareTest plugin + cloudflarePool)
-- `wrangler.toml` — Cloudflare Workers config; defines `GAME_ROOM` binding + LOADER comments
+- `wrangler.toml` — Cloudflare Workers config; defines `GAME_ROOM` binding
 - `AGENTS.md` — Comprehensive coding guidelines, naming conventions, and project standards
 - `.gitignore` — Properly configured; `.wrangler/`, `node_modules/`, `.dev.vars` are ignored
 
@@ -91,6 +90,5 @@ Refer to **AGENTS.md** for:
 - wrangler.toml structure and Durable Object binding setup
 - Single-player AI mode architecture
 - Developer Insights panel and debug event system
-- Dynamic Workers (LOADER) configuration and fallback behavior
 - Frontend HTML/CSS/JS patterns
 - What not to do (adding tooling, unnecessary files, etc.)

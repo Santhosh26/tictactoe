@@ -24,7 +24,7 @@ import {
   ALARM_INTERVAL_MS,
   AI_MOVE_DELAY_MS,
 } from './types';
-import { validateAndApply, computeAiMove, GAME_RULES_MODULE } from './sandbox';
+import { validateAndApply, computeAiMove } from './sandbox';
 
 // ---- Rate limiter per socket ----
 
@@ -310,18 +310,10 @@ export class TicTacToe {
       // In single-player mode, only the human (X) can send moves.
       if (this.gameMode === 'singleplayer' && playerSymbol !== 'X') return;
 
-      // Use sandbox for move validation if available, otherwise local fallback.
-      let result: MoveResult;
-      try {
-        result = await this.executeInSandbox(this.board, playerSymbol, index, this.turn);
-      } catch {
-        // Sandbox unavailable — use local fallback.
-        this.pushDebug('sandbox', 'Sandbox error — fell back to local validation', 'Dynamic Worker isolate threw an exception');
-        result = validateAndApply(this.board, playerSymbol, index, this.turn);
-      }
+      const result = validateAndApply(this.board, playerSymbol, index, this.turn);
 
       if (result.valid) {
-        this.pushDebug('sandbox', 'Move accepted: cell ' + index, playerSymbol + ' placed at index ' + index + ' — board updated');
+        this.pushDebug('durable-object', 'Move accepted: cell ' + index, playerSymbol + ' placed at index ' + index + ' — board updated');
         this.board = result.board;
         this.winner = result.winner;
         this.winLine = result.winLine;
@@ -575,30 +567,4 @@ export class TicTacToe {
     }
   }
 
-  // Execute move validation in a Dynamic Worker sandbox.
-  // Falls back to local validation if LOADER is unavailable.
-  private async executeInSandbox(
-    board: CellValue[],
-    playerSymbol: string,
-    moveIndex: number,
-    turn: string,
-  ): Promise<MoveResult> {
-    // Check if LOADER binding exists (Dynamic Workers API).
-    if (!this.env.LOADER) {
-      this.pushDebug('sandbox', 'Move validated locally (in-process)', 'LOADER binding unavailable — no Dynamic Worker sandbox');
-      return validateAndApply(board, playerSymbol, moveIndex, turn);
-    }
-
-    this.pushDebug('sandbox', 'Move validated in Dynamic Worker sandbox', 'Isolated V8 context — globalOutbound: null (network blocked)');
-    const worker = await this.env.LOADER.load({
-      mainModule: 'rules.js',
-      modules: {
-        'rules.js': GAME_RULES_MODULE,
-      },
-      globalOutbound: null, // No network access.
-    });
-
-    const entrypoint = worker.getEntrypoint();
-    return entrypoint.validateAndApply(board, playerSymbol, moveIndex, turn);
-  }
 }

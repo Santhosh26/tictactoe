@@ -537,7 +537,6 @@ export const HTML_TEMPLATE = `
     .debug-cat.worker         { background: #2a1f3a; color: #a78bfa; }
     .debug-cat.durable-object { background: #152540; color: #4f9cf9; }
     .debug-cat.websocket      { background: #152a15; color: #6ee86e; }
-    .debug-cat.sandbox        { background: #2a2815; color: #f9d44f; }
     .debug-cat.ai             { background: #2a1a14; color: #f97b4f; }
     .debug-cat.state-machine  { background: #2a152a; color: #e86edb; }
     .debug-label {
@@ -832,7 +831,6 @@ export const HTML_TEMPLATE = `
       // Reset debug panel counters.
       debugStorageReads = 0;
       debugStorageWrites = 0;
-      debugSandboxMode = 'Unknown';
       debugEdgeColo = '';
       document.getElementById('debug-log').innerHTML = '';
       window.history.pushState({}, '', '/');
@@ -1346,7 +1344,6 @@ export const HTML_TEMPLATE = `
     let debugPanelVisible = true;
     let debugStorageReads = 0;
     let debugStorageWrites = 0;
-    let debugSandboxMode = 'Unknown';
     let debugEdgeColo = '';
     const DEBUG_MAX_EVENTS = 100;
 
@@ -1379,10 +1376,6 @@ export const HTML_TEMPLATE = `
             if (evt.label.indexOf('loaded') !== -1) debugStorageReads++;
             if (evt.label.indexOf('persisted') !== -1) debugStorageWrites++;
           }
-          if (evt.category === 'sandbox') {
-            if (evt.label.indexOf('Dynamic Worker') !== -1) debugSandboxMode = 'Dynamic Worker isolate';
-            else if (evt.label.indexOf('local') !== -1) debugSandboxMode = 'Local fallback';
-          }
         }
       }
     }
@@ -1396,7 +1389,6 @@ export const HTML_TEMPLATE = `
         ['Phase', data.phase],
         ['Connections', String(data.playersCount || 0) + (data.gameMode === 'singleplayer' ? ' + AI' : '')],
         ['Storage R/W', debugStorageReads + ' / ' + debugStorageWrites],
-        ['Sandbox', debugSandboxMode],
         ['Turn', data.turn || '-'],
       ];
       for (var i = 0; i < items.length; i++) {

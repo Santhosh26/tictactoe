@@ -8,26 +8,8 @@ export type GamePhase = 'waiting' | 'playing' | 'finished';
 export type GameMode = 'multiplayer' | 'singleplayer';
 export type AiDifficulty = 'easy' | 'medium' | 'hard';
 
-export interface DynamicWorkerLoader {
-  load(config: {
-    mainModule: string;
-    modules: Record<string, string>;
-    globalOutbound: null;
-  }): Promise<{
-    getEntrypoint(): {
-      validateAndApply(
-        board: CellValue[],
-        playerSymbol: string,
-        moveIndex: number,
-        turn: string,
-      ): MoveResult;
-    };
-  }>;
-}
-
 export interface Env {
   GAME_ROOM: DurableObjectNamespace;
-  LOADER?: DynamicWorkerLoader;
 }
 
 export interface Scoreboard {
@@ -82,7 +64,7 @@ export const WINNING_LINES: WinLine[] = [
 
 // ---- Debug / Developer Insights ----
 
-export type DebugEventCategory = 'worker' | 'durable-object' | 'websocket' | 'sandbox' | 'ai' | 'state-machine';
+export type DebugEventCategory = 'worker' | 'durable-object' | 'websocket' | 'ai' | 'state-machine';
 
 export interface DebugEvent {
   ts: number;

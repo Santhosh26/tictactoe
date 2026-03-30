@@ -181,7 +181,7 @@ export class TicTacToe {
     }
   }
 
-  async assignSymbol(clientId: string, name: string): Promise<string> {
+  async assignSymbol(clientId: string, name: string, mode: GameMode = 'multiplayer'): Promise<string> {
     await this.ensureState();
 
     // Reconnecting player — restore their original symbol.
@@ -199,7 +199,10 @@ export class TicTacToe {
       this.playerX = clientId;
       this.nameX = name;
       await this.saveState();
-      this.pushDebug('websocket', 'Player 1 joined as X', 'DO reserved slot 1/2 - waiting for second player');
+      const detail = mode === 'singleplayer'
+        ? 'DO reserved slot 1/2 — AI will take the other slot'
+        : 'DO reserved slot 1/2 — waiting for second player';
+      this.pushDebug('websocket', 'Player 1 joined as X', detail);
       return 'X';
     }
     if (this.playerO === null && this.playerO !== '__AI__') {
@@ -243,7 +246,7 @@ export class TicTacToe {
 
     const { 0: client, 1: server } = new WebSocketPair();
 
-    const symbol = await this.assignSymbol(clientId, name);
+    const symbol = await this.assignSymbol(clientId, name, mode);
 
     // Set up single-player mode when the first player connects.
     if (mode === 'singleplayer' && symbol === 'X' && this.gameMode !== 'singleplayer') {

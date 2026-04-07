@@ -10,6 +10,8 @@ export type AiDifficulty = 'easy' | 'medium' | 'hard';
 
 export interface Env {
   GAME_ROOM: DurableObjectNamespace;
+  TURNSTILE_SECRET_KEY: string;
+  TURNSTILE_SITE_KEY: string;
 }
 
 export interface Scoreboard {

@@ -2,6 +2,10 @@ name = "tic-tac-toe-do"
 main = "src/index.ts"
 compatibility_date = "2026-03-20"
 
+# Required secrets/vars (set via `wrangler secret put` / `wrangler var put`):
+# - TURNSTILE_SECRET_KEY: Your Cloudflare Turnstile secret key (Secret)
+# - TURNSTILE_SITE_KEY: Your Cloudflare Turnstile site key (Plain text var or Secret)
+
 routes = [
   { pattern = "tictactoe.ksanthoshkumar.com/*", zone_name = "ksanthoshkumar.com" }
 ]

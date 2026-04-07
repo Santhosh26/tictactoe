@@ -3,7 +3,7 @@
 // ==========================================
 
 import { Env } from './types';
-import { HTML_TEMPLATE } from './frontend';
+import { getHtmlTemplate } from './frontend';
 
 // Re-export Durable Object for wrangler to discover.
 export { TicTacToe } from './game';
@@ -11,10 +11,30 @@ export { TicTacToe } from './game';
 // Security headers applied to all HTML responses.
 const SECURITY_HEADERS: Record<string, string> = {
   'Content-Type': 'text/html;charset=UTF-8',
-  'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' wss: ws:;",
+  'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline' https://challenges.cloudflare.com; style-src 'unsafe-inline'; connect-src 'self' wss: ws: https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com;",
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
 };
+
+/**
+ * Verify a Turnstile token with Cloudflare's Siteverify API.
+ */
+async function verifyTurnstileToken(token: string, secretKey: string, remoteIp?: string): Promise<boolean> {
+  const formData = new FormData();
+  formData.append('secret', secretKey);
+  formData.append('response', token);
+  if (remoteIp) {
+    formData.append('remoteip', remoteIp);
+  }
+
+  const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+    method: 'POST',
+    body: formData,
+  });
+
+  const data = await res.json() as { success: boolean };
+  return data.success;
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -22,10 +42,10 @@ export default {
 
     // Serve the frontend for the root path.
     if (url.pathname === '/') {
-      return new Response(HTML_TEMPLATE, { headers: SECURITY_HEADERS });
+      return new Response(getHtmlTemplate(env.TURNSTILE_SITE_KEY), { headers: SECURITY_HEADERS });
     }
 
-    // WebSocket upgrade — expects ?room=CODE&clientId=UUID&name=NAME
+    // WebSocket upgrade — expects ?room=CODE&clientId=UUID&name=NAME&turnstile=TOKEN
     if (url.pathname === '/ws') {
       // Origin validation (CSRF protection).
       const origin = request.headers.get('Origin');
@@ -36,6 +56,18 @@ export default {
         if (originUrl.host !== requestHost && !originUrl.host.startsWith('localhost') && !originUrl.host.startsWith('127.0.0.1')) {
           return new Response('Forbidden: origin mismatch', { status: 403 });
         }
+      }
+
+      // Verify Turnstile token.
+      const turnstileToken = url.searchParams.get('turnstile');
+      if (!turnstileToken) {
+        return new Response('Bad Request: Turnstile verification required', { status: 400 });
+      }
+
+      const remoteIp = request.headers.get('CF-Connecting-IP') ?? undefined;
+      const isValid = await verifyTurnstileToken(turnstileToken, env.TURNSTILE_SECRET_KEY, remoteIp);
+      if (!isValid) {
+        return new Response('Forbidden: Invalid Turnstile token', { status: 403 });
       }
 
       const room = url.searchParams.get('room');

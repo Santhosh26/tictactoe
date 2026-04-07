@@ -5,13 +5,15 @@
 // Auto-reconnection with exponential backoff. beforeunload handler. Mutual reset.
 // Single-player mode with AI difficulty selection.
 
-export const HTML_TEMPLATE = `
+export const getHtmlTemplate = (siteKey: string) => `
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Tic-Tac-Toe</title>
+  <link rel="preconnect" href="https://challenges.cloudflare.com" />
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onTurnstileLoad" defer></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -610,6 +612,10 @@ export const HTML_TEMPLATE = `
     <span class="lobby-label">Your name</span>
     <input id="name-input" maxlength="20" placeholder="Enter your name" autocomplete="off" />
 
+    <!-- Turnstile verification -->
+    <div id="turnstile-container" style="margin-top: 8px;"></div>
+    <div id="turnstile-status" style="font-size: 0.75rem; color: #666; min-height: 1.2em; text-align: center;"></div>
+
     <!-- Mode selection -->
     <div id="mode-select">
       <button class="btn-primary" onclick="showMultiplayerOptions()">Play vs Friend</button>
@@ -711,11 +717,17 @@ export const HTML_TEMPLATE = `
     let currentDifficulty = 'hard';
     let selectedDifficulty = 'hard';
     let pendingRoom   = null;
+    let pendingAutoJoinRoom = null;
     let lastPhase     = '';
     let confettiAnimId = null;
     let reconnectAttempts = 0;
     let reconnectTimer   = null;
     const MAX_RECONNECT_ATTEMPTS = 5;
+
+    // Turnstile
+    let turnstileWidgetId = null;
+    let turnstileToken    = null;
+    const TURNSTILE_SITE_KEY = '${siteKey}';
 
     // ---- Name persistence ----
 
@@ -776,8 +788,11 @@ export const HTML_TEMPLATE = `
       if (room && /^[A-Z0-9]{6}$/i.test(room)) {
         const savedName = localStorage.getItem('ttt_name');
         if (savedName) {
-          // Returning player — join immediately.
-          enterRoom(room.toUpperCase());
+          // Returning player — auto join once Turnstile is verified.
+          pendingAutoJoinRoom = room.toUpperCase();
+          showLobby();
+          showMultiplayerOptions();
+          document.getElementById('join-input').value = pendingAutoJoinRoom;
         } else {
           // New player via shared link — show lobby with room pre-filled.
           pendingRoom = room.toUpperCase();
@@ -791,13 +806,89 @@ export const HTML_TEMPLATE = `
       }
     }
 
+    // ---- Turnstile ----
+
+    window.onTurnstileLoad = function() {
+      renderTurnstile();
+    };
+
+    function renderTurnstile() {
+      const container = document.getElementById('turnstile-container');
+      if (!container) return;
+      container.innerHTML = '';
+      turnstileToken = null;
+      document.getElementById('turnstile-status').textContent = 'Verifying...';
+
+      turnstileWidgetId = turnstile.render('#turnstile-container', {
+        sitekey: TURNSTILE_SITE_KEY,
+        theme: 'dark',
+        callback: onTurnstileSuccess,
+        'error-callback': onTurnstileError,
+        'expired-callback': onTurnstileExpired,
+      });
+    }
+
+    function onTurnstileSuccess(token) {
+      turnstileToken = token;
+      document.getElementById('turnstile-status').textContent = 'Verified!';
+      
+      if (pendingAutoJoinRoom) {
+        const roomToJoin = pendingAutoJoinRoom;
+        pendingAutoJoinRoom = null;
+        enterRoom(roomToJoin, 'multiplayer');
+      }
+    }
+
+    function onTurnstileError(errorCode) {
+      console.error('Turnstile error:', errorCode);
+      document.getElementById('turnstile-status').textContent = 'Verification failed. Please refresh.';
+      turnstileToken = null;
+    }
+
+    function onTurnstileExpired() {
+      turnstileToken = null;
+      document.getElementById('turnstile-status').textContent = 'Verification expired. Please retry.';
+      if (turnstileWidgetId !== null) {
+        turnstile.reset(turnstileWidgetId);
+      }
+    }
+
+    function requireTurnstile() {
+      if (!turnstileToken) {
+        document.getElementById('turnstile-status').textContent = 'Please wait for security check...';
+        return false;
+      }
+      return true;
+    }
+
     function createGame() {
+      if (!requireTurnstile()) return;
       const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
       let code = '';
       const arr = new Uint8Array(6);
       crypto.getRandomValues(arr);
       arr.forEach(function(n) { code += chars[n % chars.length]; });
       enterRoom(code, 'multiplayer');
+    }
+
+    function joinGame() {
+      if (!requireTurnstile()) return;
+      const raw = document.getElementById('join-input').value.trim().toUpperCase();
+      if (!/^[A-Z0-9]{6}$/.test(raw)) {
+        document.getElementById('join-input').focus();
+        return;
+      }
+      enterRoom(raw, 'multiplayer');
+    }
+
+    function startAiGame() {
+      if (!requireTurnstile()) return;
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      let code = '';
+      const arr = new Uint8Array(6);
+      crypto.getRandomValues(arr);
+      arr.forEach(function(n) { code += chars[n % chars.length]; });
+      enterRoom(code, 'singleplayer', selectedDifficulty);
     }
 
     function joinGame() {
@@ -833,6 +924,13 @@ export const HTML_TEMPLATE = `
       debugStorageWrites = 0;
       debugEdgeColo = '';
       document.getElementById('debug-log').innerHTML = '';
+      
+      // Reset Turnstile for next game
+      if (turnstileWidgetId !== null && typeof turnstile !== 'undefined') {
+        turnstileToken = null;
+        turnstile.reset(turnstileWidgetId);
+      }
+      
       window.history.pushState({}, '', '/');
       showLobby();
     }
@@ -885,6 +983,11 @@ export const HTML_TEMPLATE = `
 
     function connectWS(room) {
       if (ws) { ws.close(1000); ws = null; }
+      
+      // Consume the turnstile token for this connection attempt
+      const tokenToUse = turnstileToken;
+      turnstileToken = null; // Forces a fresh token for any subsequent reconnections
+
       const clientId = getClientId();
       const name     = getMyName();
       const proto    = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -893,7 +996,8 @@ export const HTML_TEMPLATE = `
         + '&clientId='      + encodeURIComponent(clientId)
         + '&name='          + encodeURIComponent(name)
         + '&mode='          + encodeURIComponent(currentMode)
-        + '&difficulty='    + encodeURIComponent(currentDifficulty);
+        + '&difficulty='    + encodeURIComponent(currentDifficulty)
+        + '&turnstile='     + encodeURIComponent(tokenToUse || '');
 
       ws = new WebSocket(url);
 
@@ -973,17 +1077,43 @@ export const HTML_TEMPLATE = `
         btn.style.cssText = 'width:auto;padding:6px 16px;margin-top:6px;font-size:0.85rem;';
         btn.onclick = function() {
           reconnectAttempts = 0;
-          connectWS(currentRoom);
+          if (turnstileWidgetId !== null && typeof turnstile !== 'undefined') {
+             turnstileToken = null;
+             turnstile.reset(turnstileWidgetId);
+          }
+          attemptReconnect(); // Let the delay logic handle waiting for token
         };
         statusEl.appendChild(document.createElement('br'));
         statusEl.appendChild(btn);
         return;
       }
+      
       const delay = Math.pow(2, reconnectAttempts) * 1000; // 1s, 2s, 4s, 8s, 16s
       reconnectAttempts++;
       setStatus('Reconnecting in ' + (delay / 1000) + 's... (attempt ' + reconnectAttempts + '/' + MAX_RECONNECT_ATTEMPTS + ')', 'waiting');
+      
+      // We need a fresh token to reconnect
+      if (turnstileWidgetId !== null && typeof turnstile !== 'undefined') {
+        if (!turnstileToken) {
+           turnstile.reset(turnstileWidgetId);
+        }
+      }
+
       reconnectTimer = setTimeout(function() {
-        if (currentRoom) connectWS(currentRoom);
+        if (!currentRoom) return;
+        
+        if (turnstileToken) {
+          connectWS(currentRoom);
+        } else {
+          // Wait for Turnstile background solve
+          setStatus('Security check required to reconnect...', 'waiting');
+          const waitInt = setInterval(function() {
+            if (turnstileToken && currentRoom) {
+              clearInterval(waitInt);
+              connectWS(currentRoom);
+            }
+          }, 200);
+        }
       }, delay);
     }
 
